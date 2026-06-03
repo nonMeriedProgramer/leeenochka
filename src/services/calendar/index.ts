@@ -180,6 +180,15 @@ export async function createEvent(event: {
   return { uid, title: event.title };
 }
 
+// "20260603T153000Z" → "2026-06-03T15:30:00Z"
+function parseICalDate(raw: string): string {
+  const s = raw.trim().replace(/[^\dTZ]/g, '');
+  if (s.length === 8) return `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`;
+  const date = `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`;
+  const time = `${s.slice(9,11)}:${s.slice(11,13)}:${s.slice(13,15)}`;
+  return s.endsWith('Z') ? `${date}T${time}Z` : `${date}T${time}`;
+}
+
 export async function getUpcomingEvents(days = 1): Promise<Array<{ title: string; start: string; end: string }>> {
   if (!isCalendarConnected()) return [];
   try {
@@ -208,8 +217,8 @@ export async function getUpcomingEvents(days = 1): Promise<Array<{ title: string
 
     return (res.match(/BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/g) ?? []).map(ics => ({
       title: ics.match(/SUMMARY:(.+)/)?.[1]?.trim() ?? '(без назви)',
-      start: ics.match(/DTSTART[^:]*:(.+)/)?.[1]?.trim() ?? '',
-      end:   ics.match(/DTEND[^:]*:(.+)/)?.[1]?.trim()   ?? '',
+      start: parseICalDate(ics.match(/DTSTART[^:]*:(.+)/)?.[1]?.trim() ?? ''),
+      end:   parseICalDate(ics.match(/DTEND[^:]*:(.+)/)?.[1]?.trim()   ?? ''),
     })).sort((a, b) => a.start.localeCompare(b.start));
   } catch { return []; }
 }
