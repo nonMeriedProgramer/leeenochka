@@ -21,21 +21,17 @@ export async function createTask(intent: ParsedIntent): Promise<string> {
 
   const properties: Record<string, unknown> = {
     Name: { title: [{ text: { content: intent.title } }] },
+    Type: { select: { name: intent.type === 'note' ? 'note' : 'task' } },
+    Status: { select: { name: 'To Do' } },
   };
 
-  if (intent.deadline) {
-    properties['Due Date'] = { date: { start: intent.deadline } };
-  }
-  if (intent.priority) {
-    properties['Priority'] = { select: { name: intent.priority } };
-  }
+  if (intent.deadline) properties['Due Date'] = { date: { start: intent.deadline } };
+  if (intent.priority) properties['Priority'] = { select: { name: intent.priority } };
+  if (intent.description) properties['Description'] = { rich_text: [{ text: { content: intent.description } }] };
 
   const page = await notion.pages.create({
     parent: { database_id: dbId },
     properties: properties as never,
-    children: intent.description
-      ? [{ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ text: { content: intent.description } }] } }]
-      : [],
   });
 
   return (page as { url?: string }).url ?? 'https://notion.so';
