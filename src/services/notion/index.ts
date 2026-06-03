@@ -30,7 +30,7 @@ export async function createTask(intent: ParsedIntent): Promise<string> {
     properties['Priority'] = { select: { name: intent.priority } };
   }
 
-  const { url } = await notion.pages.create({
+  const page = await notion.pages.create({
     parent: { database_id: dbId },
     properties: properties as never,
     children: intent.description
@@ -38,7 +38,7 @@ export async function createTask(intent: ParsedIntent): Promise<string> {
       : [],
   });
 
-  return url;
+  return (page as { url?: string }).url ?? 'https://notion.so';
 }
 
 export async function getRecentTasks(limit = 5): Promise<string[]> {

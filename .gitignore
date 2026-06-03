@@ -2,5 +2,7 @@ node_modules/
 dist/
 .env.local
 .env
+data/
 *.oga
 *.mp3
+*.ogg

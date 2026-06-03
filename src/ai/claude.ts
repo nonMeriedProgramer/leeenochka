@@ -1,65 +1,101 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import type { ParsedIntent } from '../types/index.js';
+import type { CompoundIntent } from './parser.js';
+import db from '../db/index.js';
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-const SYSTEM_PROMPT = `You are a personal assistant that parses voice/text messages and extracts structured intent.
-
-Always respond with valid JSON matching this schema:
-{
-  "type": "event" | "task" | "note" | "query" | "unknown",
-  "title": string,
-  "description": string | null,
-  "datetime": ISO8601 string | null,
-  "duration": number (minutes) | null,
-  "project": string | null,
-  "priority": "high" | "medium" | "low" | null,
-  "deadline": ISO8601 date string | null,
-  "clarificationNeeded": string | null
+let _ai: GoogleGenerativeAI | null = null;
+function ai() {
+  return _ai ??= new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 }
+
+const MODEL = 'gemini-2.5-flash';
+
+const PARSE_SYSTEM = `Parse the Ukrainian message and return ONLY a JSON object. No markdown, no explanation.
+
+Format:
+{"type":"event","title":"...","datetime":"2026-06-03T19:00:00","duration":60,"description":null,"project":null,"priority":null,"deadline":null,"clarificationNeeded":null}
 
 Rules:
-- "event" = calendar event with a specific time
-- "task" = to-do item, may have a deadline but no specific time
-- "note" = information to save, no action needed
-- "query" = user is asking a question
-- If datetime is ambiguous, set clarificationNeeded
-- Relative times like "tomorrow", "in 2 hours" should be resolved based on current time
-- Current datetime: ${new Date().toISOString()}
-- Timezone: Europe/Kyiv (UTC+3)`;
+- type: "event" (meeting/appointment with time), "task" (todo), "reminder" (alert), "query" (question), "unknown"
+- title: keep original names exactly
+- datetime: full ISO8601, resolve relative dates. today=${new Date().toISOString().split('T')[0]}
+- duration: INTEGER minutes only (e.g. 60). NOT a time string.
+- timezone: Europe/Kyiv (UTC+3)`;
 
-export async function parseIntent(text: string): Promise<ParsedIntent> {
-  const response = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 512,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: text }],
-  });
+export async function parseIntent(text: string): Promise<ParsedIntent | CompoundIntent> {
+  const { quickParseCompound } = await import('./parser.js');
+  const quick = quickParseCompound(text);
+  if (quick) return quick;
 
-  const content = response.content[0];
-  if (content.type !== 'text') throw new Error('Unexpected response type');
-
-  const jsonMatch = content.text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('No JSON in response');
-
-  return JSON.parse(jsonMatch[0]) as ParsedIntent;
+  const model = ai().getGenerativeModel({ model: MODEL, systemInstruction: PARSE_SYSTEM });
+  try {
+    const result = await model.generateContent(text);
+    const raw = result.response.text();
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) return { type: 'unknown', title: text };
+    const parsed = JSON.parse(match[0]) as ParsedIntent;
+    // Якщо Gemini не розпізнав — повернемо unknown щоб бот перейшов у chat
+    if (!parsed.type || parsed.type === 'unknown') return { type: 'unknown', title: text };
+    return parsed;
+  } catch {
+    return { type: 'unknown', title: text };
+  }
 }
 
-export async function formatConfirmation(intent: ParsedIntent): Promise<string> {
-  const parts: string[] = [];
+export async function chat(userMessage: string): Promise<string> {
+  const history = (db.prepare(
+    'SELECT role, content FROM messages ORDER BY id DESC LIMIT 10'
+  ).all() as Array<{ role: string; content: string }>).reverse();
 
-  const typeLabel = { event: '📅 Подія', task: '✅ Задача', note: '📝 Нотатка', query: '❓ Запит', unknown: '🤔 Незрозуміло' };
-  parts.push(typeLabel[intent.type] || '🤔');
-  parts.push(`*${intent.title}*`);
+  const model = ai().getGenerativeModel({
+    model: MODEL,
+    systemInstruction: `Ти — Leeenochka, персональний AI-асистент. Відповідай українською, коротко.
+Якщо користувач хоче запланувати подію і ти зібрав всі деталі (назва, дата, час) — підтверди словами типу "Записую: [назва] [дата] о [час]. Підтвердити?" і ОБОВ'ЯЗКОВО в кінці додай JSON у форматі:
+||{"type":"event","title":"...","datetime":"ISO8601","duration":60}||
+Якщо деталей ще не вистачає — уточнюй. Не вигадуй деталі.`,
+  });
 
+  const geminiChat = model.startChat({
+    history: history.map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    })),
+  });
+
+  const result = await geminiChat.sendMessage(userMessage);
+  const text = result.response.text();
+  if (!text || text === 'true' || text === 'false') {
+    // Gemini повернув пусту/булеву відповідь — ретраємо з простішим промптом
+    const r2 = await ai().getGenerativeModel({ model: MODEL })
+      .generateContent(`Відповідай як персональний асистент українською. Повідомлення: "${userMessage}"`);
+    const fallback = r2.response.text();
+    saveMessage('user', userMessage);
+    saveMessage('assistant', fallback);
+    return fallback;
+  }
+  saveMessage('user', userMessage);
+  saveMessage('assistant', text);
+  return text;
+}
+
+export function saveMessage(role: 'user' | 'assistant', content: string) {
+  db.prepare('INSERT INTO messages (role, content) VALUES (?, ?)').run(role, content);
+  db.prepare('DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 100)').run();
+}
+
+export function formatConfirmation(intent: ParsedIntent): string {
+  const labels: Record<string, string> = {
+    event: '📅 Подія', task: '✅ Задача', note: '📝 Нотатка',
+    reminder: '⏰ Нагадування', query: '❓', unknown: '🤔',
+  };
+  const lines = [labels[intent.type] ?? '🤔', `*${intent.title}*`];
   if (intent.datetime) {
     const d = new Date(intent.datetime);
-    parts.push(`🕐 ${d.toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' })}`);
+    lines.push(`🕐 ${d.toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv', dateStyle: 'short', timeStyle: 'short' })}`);
   }
-  if (intent.duration) parts.push(`⏱ ${intent.duration} хв`);
-  if (intent.deadline) parts.push(`📌 Дедлайн: ${intent.deadline}`);
-  if (intent.project) parts.push(`📁 Проект: ${intent.project}`);
-  if (intent.description) parts.push(`💬 ${intent.description}`);
-
-  return parts.join('\n');
+  if (intent.duration)    lines.push(`⏱ ${intent.duration} хв`);
+  if (intent.deadline)    lines.push(`📌 Дедлайн: ${intent.deadline}`);
+  if (intent.project)     lines.push(`📁 ${intent.project}`);
+  if (intent.description) lines.push(`💬 ${intent.description}`);
+  return lines.join('\n');
 }

@@ -1,12 +1,18 @@
 import OpenAI from 'openai';
 import { createReadStream } from 'fs';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+let _groq: OpenAI | null = null;
+function getGroq(): OpenAI {
+  return _groq ??= new OpenAI({
+    baseURL: 'https://api.groq.com/openai/v1',
+    apiKey: process.env.GROQ_API_KEY,
+  });
+}
 
 export async function transcribeAudio(filePath: string): Promise<string> {
-  const transcription = await openai.audio.transcriptions.create({
+  const transcription = await getGroq().audio.transcriptions.create({
     file: createReadStream(filePath),
-    model: 'whisper-1',
+    model: 'whisper-large-v3',
     language: 'uk',
   });
   return transcription.text;

@@ -1,4 +1,4 @@
-export type IntentType = 'event' | 'task' | 'note' | 'query' | 'unknown';
+export type IntentType = 'event' | 'task' | 'note' | 'reminder' | 'query' | 'unknown';
 
 export interface ParsedIntent {
   type: IntentType;
