@@ -130,6 +130,15 @@ export function quickParse(text: string): ParsedIntent | null {
     return { type: 'reminder', title, datetime };
   }
 
+  // НОТАТКА → Notion
+  if (/^(запиши|запис|нотатка|нотатку|збережи|зафіксуй|занотуй)[:\s]/.test(lower) || /^(запиши|збережи)\s+(ідею|нотатку|думку|запис)/.test(lower)) {
+    const title = cleaned
+      .replace(/^(запиши|запис|нотатка|нотатку|збережи|зафіксуй|занотуй)[:\s]*/i, '')
+      .replace(/^(ідею|нотатку|думку|запис)[:\s]*/i, '')
+      .trim();
+    return { type: 'note', title };
+  }
+
   // ЗАДАЧА
   if (/^задача[:\s]|^треба\s|^потрібно\s|^зроби\s|^додай\s+задач/.test(lower)) {
     const title = cleaned.replace(/^задача[:\s]*/i, '').replace(/^треба\s+/i, '').trim();
