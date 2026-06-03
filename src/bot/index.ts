@@ -6,7 +6,6 @@ import {
   createEvent, findFreeSlot, isCalendarConnected, getUpcomingEvents,
 } from '../services/calendar/index.js';
 import { createReminder, getReminders, isRemindersConnected } from '../services/reminders/index.js';
-import { saveIdea, createDailyNote, isObsidianConnected } from '../services/obsidian/index.js';
 import { createTask } from '../services/notion/index.js';
 import { downloadVoice } from '../utils/telegram.js';
 import { saveAppleCredentials } from '../auth/tokens.js';
@@ -25,12 +24,10 @@ export function createBot(token: string) {
   // ─── /start ───────────────────────────────────────────────────
   bot.command('start', async (ctx) => {
     const calStatus = isCalendarConnected() ? '✅' : '❌';
-    const obsStatus = isObsidianConnected() ? '✅' : '❌';
     await ctx.reply(
       '👋 Привіт! Я Leeenochka.\n\n' +
       `📅 Apple Calendar: ${calStatus}\n` +
-      `⏰ Apple Reminders: ${calStatus}\n` +
-      `📓 Obsidian: ${obsStatus}\n\n` +
+      `⏰ Apple Reminders: ${calStatus}\n\n` +
       'Просто пиши або надсилай голосові:\n' +
       '• "Завтра о 15 зустріч з Андрієм"\n' +
       '• "Нагадай купити молоко о 18"\n' +
@@ -341,12 +338,8 @@ async function executeIntent(ctx: any, intent: ParsedIntent) {
       }
 
     } else if (intent.type === 'note') {
-      if (isObsidianConnected()) {
-        const ok = await saveIdea(intent.title, intent.description ?? '');
-        await ctx.reply(ok ? `📓 Записано в Obsidian: *${intent.title}*` : `❌ Obsidian недоступний`, { parse_mode: 'Markdown' });
-      } else {
-        await ctx.reply(`📝 Зафіксовано: ${intent.title}\n_(Підключи Obsidian щоб зберігати нотатки)_`, { parse_mode: 'Markdown' });
-      }
+      const url = await createTask({ ...intent, type: 'task' });
+      await ctx.reply(`📝 Нотатку збережено в Notion: *${intent.title}*\n[Відкрити](${url})`, { parse_mode: 'Markdown' });
 
     } else {
       await ctx.reply(`📝 Зафіксовано: ${intent.title}`);
