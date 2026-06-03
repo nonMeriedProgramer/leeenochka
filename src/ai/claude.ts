@@ -1,14 +1,17 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import OpenAI from 'openai';
 import type { ParsedIntent } from '../types/index.js';
 import type { CompoundIntent } from './parser.js';
 import db from '../db/index.js';
 
-let _ai: GoogleGenerativeAI | null = null;
-function ai() {
-  return _ai ??= new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+let _client: OpenAI | null = null;
+function client() {
+  return _client ??= new OpenAI({
+    apiKey: process.env.FREEMODEL_API_KEY!,
+    baseURL: 'https://api.freemodel.dev/v1',
+  });
 }
 
-const MODEL = 'gemini-2.5-flash';
+const MODEL = 'gpt-5.5';
 
 const PARSE_SYSTEM = `Parse the Ukrainian message and return ONLY a JSON object. No markdown, no explanation.
 
@@ -16,7 +19,7 @@ Format:
 {"type":"event","title":"...","datetime":"2026-06-03T19:00:00","duration":60,"description":null,"project":null,"priority":null,"deadline":null,"clarificationNeeded":null}
 
 Rules:
-- type: "event" (meeting/appointment with time), "task" (todo), "reminder" (alert), "query" (question), "unknown"
+- type: "event" (meeting/appointment with time), "task" (todo), "reminder" (alert), "note" (save idea/thought to notes), "query" (question), "unknown"
 - title: keep original names exactly
 - datetime: full ISO8601, resolve relative dates. today=${new Date().toISOString().split('T')[0]}
 - duration: INTEGER minutes only (e.g. 60). NOT a time string.
@@ -27,14 +30,19 @@ export async function parseIntent(text: string): Promise<ParsedIntent | Compound
   const quick = quickParseCompound(text);
   if (quick) return quick;
 
-  const model = ai().getGenerativeModel({ model: MODEL, systemInstruction: PARSE_SYSTEM });
   try {
-    const result = await model.generateContent(text);
-    const raw = result.response.text();
+    const res = await client().chat.completions.create({
+      model: MODEL,
+      messages: [
+        { role: 'system', content: PARSE_SYSTEM },
+        { role: 'user', content: text },
+      ],
+      temperature: 0,
+    });
+    const raw = res.choices[0]?.message?.content ?? '';
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) return { type: 'unknown', title: text };
     const parsed = JSON.parse(match[0]) as ParsedIntent;
-    // Якщо Gemini не розпізнав — повернемо unknown щоб бот перейшов у chat
     if (!parsed.type || parsed.type === 'unknown') return { type: 'unknown', title: text };
     return parsed;
   } catch {
@@ -42,37 +50,28 @@ export async function parseIntent(text: string): Promise<ParsedIntent | Compound
   }
 }
 
+const CHAT_SYSTEM = `Ти — Leeenochka, персональний AI-асистент. Відповідай українською, коротко.
+Якщо користувач хоче запланувати подію і ти зібрав всі деталі (назва, дата, час) — підтверди словами типу "Записую: [назва] [дата] о [час]. Підтвердити?" і ОБОВ'ЯЗКОВО в кінці додай JSON у форматі:
+||{"type":"event","title":"...","datetime":"ISO8601","duration":60}||
+Якщо деталей ще не вистачає — уточнюй. Не вигадуй деталі.`;
+
 export async function chat(userMessage: string): Promise<string> {
   const history = (db.prepare(
     'SELECT role, content FROM messages ORDER BY id DESC LIMIT 10'
   ).all() as Array<{ role: string; content: string }>).reverse();
 
-  const model = ai().getGenerativeModel({
-    model: MODEL,
-    systemInstruction: `Ти — Leeenochka, персональний AI-асистент. Відповідай українською, коротко.
-Якщо користувач хоче запланувати подію і ти зібрав всі деталі (назва, дата, час) — підтверди словами типу "Записую: [назва] [дата] о [час]. Підтвердити?" і ОБОВ'ЯЗКОВО в кінці додай JSON у форматі:
-||{"type":"event","title":"...","datetime":"ISO8601","duration":60}||
-Якщо деталей ще не вистачає — уточнюй. Не вигадуй деталі.`,
-  });
-
-  const geminiChat = model.startChat({
-    history: history.map(m => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
+  const messages: OpenAI.ChatCompletionMessageParam[] = [
+    { role: 'system', content: CHAT_SYSTEM },
+    ...history.map(m => ({
+      role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+      content: m.content,
     })),
-  });
+    { role: 'user', content: userMessage },
+  ];
 
-  const result = await geminiChat.sendMessage(userMessage);
-  const text = result.response.text();
-  if (!text || text === 'true' || text === 'false') {
-    // Gemini повернув пусту/булеву відповідь — ретраємо з простішим промптом
-    const r2 = await ai().getGenerativeModel({ model: MODEL })
-      .generateContent(`Відповідай як персональний асистент українською. Повідомлення: "${userMessage}"`);
-    const fallback = r2.response.text();
-    saveMessage('user', userMessage);
-    saveMessage('assistant', fallback);
-    return fallback;
-  }
+  const res = await client().chat.completions.create({ model: MODEL, messages });
+  const text = res.choices[0]?.message?.content ?? '';
+
   saveMessage('user', userMessage);
   saveMessage('assistant', text);
   return text;

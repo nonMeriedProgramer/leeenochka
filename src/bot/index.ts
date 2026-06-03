@@ -5,6 +5,8 @@ import { transcribeAudio } from '../transcription/whisper.js';
 import {
   createEvent, findFreeSlot, isCalendarConnected, getUpcomingEvents,
 } from '../services/calendar/index.js';
+import { createReminder, getReminders, isRemindersConnected } from '../services/reminders/index.js';
+import { saveIdea, createDailyNote, isObsidianConnected } from '../services/obsidian/index.js';
 import { createTask } from '../services/notion/index.js';
 import { downloadVoice } from '../utils/telegram.js';
 import { saveAppleCredentials } from '../auth/tokens.js';
@@ -22,18 +24,21 @@ export function createBot(token: string) {
 
   // ─── /start ───────────────────────────────────────────────────
   bot.command('start', async (ctx) => {
-    const calStatus = isCalendarConnected() ? '✅ Apple Calendar підключено' : '❌ Apple Calendar не підключено';
+    const calStatus = isCalendarConnected() ? '✅' : '❌';
+    const obsStatus = isObsidianConnected() ? '✅' : '❌';
     await ctx.reply(
       '👋 Привіт! Я Leeenochka.\n\n' +
-      `📅 Google Calendar: ${calStatus}\n\n` +
-      'Просто пиши або надсилай голосові — скажи що треба зробити:\n' +
+      `📅 Apple Calendar: ${calStatus}\n` +
+      `⏰ Apple Reminders: ${calStatus}\n` +
+      `📓 Obsidian: ${obsStatus}\n\n` +
+      'Просто пиши або надсилай голосові:\n' +
       '• "Завтра о 15 зустріч з Андрієм"\n' +
       '• "Нагадай купити молоко о 18"\n' +
-      '• "Задача: написати звіт до п\'ятниці"\n\n' +
+      '• "Запиши ідею: нова функція для бота"\n\n' +
       '/setup — підключити Apple Calendar\n' +
       '/today — розклад на сьогодні\n' +
       '/week — на тиждень\n' +
-      '/undo — відмінити останню дію',
+      '/reminders — список нагадувань',
     );
   });
 
@@ -129,6 +134,20 @@ export function createBot(token: string) {
       });
       await ctx.reply(`📅 *Найближчі 7 днів:*\n${lines.join('\n')}`, { parse_mode: 'Markdown' });
     } catch { await ctx.reply('Не вдалось отримати події.'); }
+  });
+
+  // ─── /reminders ───────────────────────────────────────────────
+  bot.command('reminders', async (ctx) => {
+    if (!isRemindersConnected()) { await ctx.reply('Спочатку підключи Apple: /setup'); return; }
+    try {
+      const items = await getReminders();
+      if (!items.length) { await ctx.reply('⏰ Нагадувань немає.'); return; }
+      const lines = items.map(r => {
+        const due = r.due ? ` — ${new Date(r.due).toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv', dateStyle: 'short', timeStyle: 'short' })}` : '';
+        return `• ${r.title}${due}`;
+      });
+      await ctx.reply(`⏰ *Нагадування:*\n${lines.join('\n')}`, { parse_mode: 'Markdown' });
+    } catch { await ctx.reply('Не вдалось отримати нагадування.'); }
   });
 
   // ─── /undo ────────────────────────────────────────────────────
@@ -309,10 +328,25 @@ async function executeIntent(ctx: any, intent: ParsedIntent) {
       await ctx.reply(`✅ Задачу додано в Notion!\n📝 [Відкрити](${url})`, { parse_mode: 'Markdown' });
 
     } else if (intent.type === 'reminder') {
-      const fireAt = intent.datetime ?? new Date(Date.now() + 3600000).toISOString();
-      db.prepare('INSERT INTO reminders (fire_at, text) VALUES (?, ?)').run(fireAt, intent.title);
-      const d = new Date(fireAt);
-      await ctx.reply(`⏰ Нагадаю: *${intent.title}*\n🕐 ${d.toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' })}`, { parse_mode: 'Markdown' });
+      if (isRemindersConnected()) {
+        await createReminder({ title: intent.title, due: intent.datetime ?? undefined });
+        const d = intent.datetime ? new Date(intent.datetime) : null;
+        const timeStr = d ? ` о ${d.toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv', dateStyle: 'short', timeStyle: 'short' })}` : '';
+        await ctx.reply(`⏰ Нагадування додано в Apple Reminders: *${intent.title}*${timeStr}`, { parse_mode: 'Markdown' });
+      } else {
+        const fireAt = intent.datetime ?? new Date(Date.now() + 3600000).toISOString();
+        db.prepare('INSERT INTO reminders (fire_at, text) VALUES (?, ?)').run(fireAt, intent.title);
+        const d = new Date(fireAt);
+        await ctx.reply(`⏰ Нагадаю: *${intent.title}*\n🕐 ${d.toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' })}`, { parse_mode: 'Markdown' });
+      }
+
+    } else if (intent.type === 'note') {
+      if (isObsidianConnected()) {
+        const ok = await saveIdea(intent.title, intent.description ?? '');
+        await ctx.reply(ok ? `📓 Записано в Obsidian: *${intent.title}*` : `❌ Obsidian недоступний`, { parse_mode: 'Markdown' });
+      } else {
+        await ctx.reply(`📝 Зафіксовано: ${intent.title}\n_(Підключи Obsidian щоб зберігати нотатки)_`, { parse_mode: 'Markdown' });
+      }
 
     } else {
       await ctx.reply(`📝 Зафіксовано: ${intent.title}`);
