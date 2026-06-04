@@ -125,11 +125,17 @@ export function quickParse(text: string): ParsedIntent | null {
   const lower = cleaned.toLowerCase();
 
   // CALENDAR QUERIES
-  if (/що.{0,15}(сьогодні|сьогод)/.test(lower) || /розклад.{0,10}(сьогодні|на день)/.test(lower) || lower === 'сьогодні' || lower === 'розклад')
-    return { type: 'query', title: '__today__' };
-  if (/що.{0,15}завтра/.test(lower) || /розклад.{0,10}завтра/.test(lower))
+  if (
+    /що.{0,20}(сьогодні|сьогод|на день|в мене)/.test(lower) ||
+    /розклад.{0,15}(сьогодні|на день|на сьогодні)/.test(lower) ||
+    /план.{0,10}(на день|на сьогодні|сьогодні)/.test(lower) ||
+    /що.{0,5}(план|маю|заплановано)/.test(lower) ||
+    /^(сьогодні|на сьогодні|мій день|мій розклад|розклад|план на день)\??$/.test(lower)
+  ) return { type: 'query', title: '__today__' };
+
+  if (/що.{0,15}завтра/.test(lower) || /розклад.{0,10}завтра/.test(lower) || /^завтра\??$/.test(lower))
     return { type: 'query', title: '__tomorrow__' };
-  if (/що.{0,15}(тижн|тиждень|week)/.test(lower))
+  if (/що.{0,15}(тижн|тиждень|week)/.test(lower) || /розклад.{0,10}тижн/.test(lower))
     return { type: 'query', title: '__week__' };
 
   // ВІДМІНА / ПЕРЕНОС
