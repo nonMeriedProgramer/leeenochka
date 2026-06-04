@@ -171,13 +171,50 @@ function toICS(uid: string, title: string, start: Date, end: Date, description?:
 
 export async function createEvent(event: {
   title: string; start: string; durationMinutes: number; description?: string;
-}): Promise<{ uid: string; title: string }> {
+}): Promise<{ uid: string; title: string; href: string }> {
   const calUrl = await getCalendarUrl();
   const uid = uuid();
   const start = new Date(event.start);
   const end = new Date(start.getTime() + event.durationMinutes * 60000);
-  await put(`${calUrl}${uid}.ics`, toICS(uid, event.title, start, end, event.description));
-  return { uid, title: event.title };
+  const href = `${calUrl}${uid}.ics`;
+  await put(href, toICS(uid, event.title, start, end, event.description));
+  return { uid, title: event.title, href };
+}
+
+// Видаляє подію за повним URL ресурсу (.ics)
+export function deleteEvent(href: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(href);
+    const req = https.request({
+      hostname: u.hostname, port: u.port || 443, path: u.pathname,
+      method: 'DELETE', servername: u.hostname,
+      headers: { Authorization: basicAuth(), Connection: 'close' },
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        if ((res.statusCode && res.statusCode < 300) || res.statusCode === 404) resolve();
+        else reject(new Error(`DELETE -> HTTP ${res.statusCode}: ${text.slice(0, 200)}`));
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+// Знаходить події, чия назва містить query (для переносу/відміни)
+export async function findEventByTitle(
+  query: string, days = 7,
+): Promise<Array<{ title: string; start: string; end: string; href: string }>> {
+  const q = query.trim().toLowerCase();
+  const events = await getUpcomingEventsWithRefs(days);
+  const exact = events.filter(e => e.title.toLowerCase().includes(q));
+  if (exact.length || !q) return exact;
+  // запасний варіант — співпадіння по окремих словах
+  const words = q.split(/\s+/).filter(w => w.length > 2);
+  if (!words.length) return [];
+  return events.filter(e => words.some(w => e.title.toLowerCase().includes(w)));
 }
 
 // "20260603T153000Z" → "2026-06-03T15:30:00Z"
@@ -189,7 +226,10 @@ function parseICalDate(raw: string): string {
   return s.endsWith('Z') ? `${date}T${time}Z` : `${date}T${time}`;
 }
 
-export async function getUpcomingEvents(days = 1): Promise<Array<{ title: string; start: string; end: string }>> {
+// Події у вікні `days` разом із href кожного ресурсу (потрібен для видалення/переносу)
+export async function getUpcomingEventsWithRefs(
+  days = 1,
+): Promise<Array<{ title: string; start: string; end: string; href: string }>> {
   if (!isCalendarConnected()) return [];
   try {
     const calUrl = await getCalendarUrl();
@@ -216,12 +256,26 @@ export async function getUpcomingEvents(days = 1): Promise<Array<{ title: string
       req.end(payload);
     });
 
-    return (res.match(/BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/g) ?? []).map(ics => ({
-      title: ics.match(/SUMMARY:(.+)/)?.[1]?.trim() ?? '(без назви)',
-      start: parseICalDate(ics.match(/DTSTART[^:]*:(.+)/)?.[1]?.trim() ?? ''),
-      end:   parseICalDate(ics.match(/DTEND[^:]*:(.+)/)?.[1]?.trim()   ?? ''),
-    })).sort((a, b) => a.start.localeCompare(b.start));
+    // Парсимо по <response> блоках, щоб привʼязати href до події
+    const out: Array<{ title: string; start: string; end: string; href: string }> = [];
+    for (const block of res.split(/<(?:[a-z0-9]+:)?response[ >]/i).slice(1)) {
+      const ics = block.match(/BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/)?.[0];
+      if (!ics) continue;
+      const hrefPath = block.match(/<(?:[a-z0-9]+:)?href[^>]*>\s*([^<]+?)\s*<\/(?:[a-z0-9]+:)?href>/i)?.[1]?.trim();
+      if (!hrefPath) continue;
+      out.push({
+        title: ics.match(/SUMMARY:(.+)/)?.[1]?.trim() ?? '(без назви)',
+        start: parseICalDate(ics.match(/DTSTART[^:]*:(.+)/)?.[1]?.trim() ?? ''),
+        end:   parseICalDate(ics.match(/DTEND[^:]*:(.+)/)?.[1]?.trim()   ?? ''),
+        href:  new URL(hrefPath, calUrl).toString(),
+      });
+    }
+    return out.sort((a, b) => a.start.localeCompare(b.start));
   } catch { return []; }
+}
+
+export async function getUpcomingEvents(days = 1): Promise<Array<{ title: string; start: string; end: string }>> {
+  return (await getUpcomingEventsWithRefs(days)).map(({ title, start, end }) => ({ title, start, end }));
 }
 
 export async function findFreeSlot(durationMinutes: number, afterDate = new Date()): Promise<Date | null> {
