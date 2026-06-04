@@ -1,6 +1,6 @@
 import type OpenAI from 'openai';
 import { chatProvider, saveMessage } from './claude.js';
-import { TOOLS, dispatch, type ToolOutcome } from './tools.js';
+import { TOOLS, dispatch, buildChecklist, type ToolOutcome } from './tools.js';
 import db from '../db/index.js';
 
 export type AgentResult =
@@ -82,4 +82,23 @@ export async function runAgent(userMessage: string): Promise<AgentResult> {
   saveMessage('user', userMessage);
   saveMessage('assistant', finalText);
   return { kind: 'done', text: finalText };
+}
+
+// Генерує ідеї (форсує propose_items) — для ранкового брифа/проактивних пропозицій
+export async function generateIdeas(context: string): Promise<Array<{ label: string; create: () => Promise<string> }>> {
+  const { client, model, system } = chatProvider();
+  try {
+    const res = await client.chat.completions.create({
+      model,
+      messages: [{ role: 'system', content: system }, { role: 'user', content: context }],
+      tools: TOOLS.filter(t => t.function.name === 'propose_items'),
+      tool_choice: { type: 'function', function: { name: 'propose_items' } },
+      temperature: 0.6, max_tokens: 500,
+    });
+    const call = (res.choices[0]?.message?.tool_calls ?? []).find(c => c.type === 'function');
+    if (!call) return [];
+    return buildChecklist(JSON.parse(call.function.arguments || '{}').items ?? []);
+  } catch {
+    return [];
+  }
 }

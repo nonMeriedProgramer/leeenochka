@@ -26,6 +26,17 @@ function checklistKeyboard(cl: NonNullable<typeof pendingChecklist>): InlineKeyb
   return kb;
 }
 
+// Проактивно надіслати чеклист (для планувальника / ранкового брифа)
+export async function presentChecklist(
+  bot: Bot, chatId: number, card: string,
+  items: Array<{ label: string; create: () => Promise<string> }>,
+): Promise<void> {
+  if (!items.length) return;
+  clearPending();
+  pendingChecklist = { items, selected: items.map(() => false) };
+  await bot.api.sendMessage(chatId, card, { reply_markup: checklistKeyboard(pendingChecklist) });
+}
+
 export function createBot(token: string) {
   const bot = new Bot(token);
   bot.use(ownerGuard);

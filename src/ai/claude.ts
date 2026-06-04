@@ -19,6 +19,16 @@ const FALLBACK_MODEL = 'gpt-5.5';
 
 const fmtDate = (d: Date) => d.toLocaleDateString('uk-UA', { timeZone: 'Europe/Kyiv', dateStyle: 'long' });
 
+// Пригадує збережені вподобання/факти, щоб модель їх враховувала
+function recallMemories(): string {
+  try {
+    const rows = db.prepare('SELECT content FROM memories ORDER BY id DESC LIMIT 15')
+      .all() as Array<{ content: string }>;
+    if (!rows.length) return '';
+    return `\n\nЩО ПАМʼЯТАЮ ПРО КОРИСТУВАЧА (враховуй у відповідях, створенні та пропозиціях):\n${rows.map(r => `- ${r.content}`).join('\n')}`;
+  } catch { return ''; }
+}
+
 function systemPrompt(): string {
   const today = fmtDate(new Date());
   const tomorrow = fmtDate(new Date(Date.now() + 86400000));
@@ -48,7 +58,7 @@ function systemPrompt(): string {
 - Бракує даних для створення — коротко перепитай.
 
 Усі datetime — у форматі 2026-06-04T19:00:00+03:00 (Київ, UTC+3).
-Сьогодні: ${today}. Завтра: ${tomorrow}.`;
+Сьогодні: ${today}. Завтра: ${tomorrow}.${recallMemories()}`;
 }
 
 // Повертає провайдера для агента: Groq якщо є ключ, інакше FreeModel

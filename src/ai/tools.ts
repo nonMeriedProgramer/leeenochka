@@ -71,16 +71,32 @@ async function createItem(item: Item): Promise<{ message: string; undo?: () => P
     }
     case 'reminder': {
       const due = ensureKyivTz(String(item.datetime ?? ''));
-      if (isRemindersConnected()) {
-        await createReminder({ title: item.title, due });
-        return { message: `⏰ «${item.title}» — ${fmtKyiv(due)}` };
-      }
+      // Завжди в SQLite — щоб планувальник пінгнув у Telegram у потрібний час
       db.prepare('INSERT INTO reminders (fire_at, text) VALUES (?, ?)').run(due, item.title);
-      return { message: `⏰ «${item.title}» — ${fmtKyiv(due)}` };
+      // Додатково дзеркалимо в Apple Reminders, якщо підключено
+      if (isRemindersConnected()) { try { await createReminder({ title: item.title, due }); } catch { /* не критично */ } }
+      return { message: `⏰ Нагадаю: «${item.title}» — ${fmtKyiv(due)}` };
     }
     default:
       return { message: `• ${item.title}` };
   }
+}
+
+// Перетворює сирі пункти (від моделі) на пункти чеклиста з create-замиканнями
+export function buildChecklist(rawItems: any[]): Array<{ label: string; create: () => Promise<string> }> {
+  const items: Item[] = (Array.isArray(rawItems) ? rawItems : [])
+    .map((it: any): Item => ({
+      kind: (['event', 'task', 'note', 'reminder'].includes(it.kind) ? it.kind : 'task'),
+      title: String(it.title ?? '').trim(),
+      datetime: it.datetime ? ensureKyivTz(String(it.datetime)) : undefined,
+      duration_minutes: it.duration_minutes,
+      description: it.description,
+    }))
+    .filter((it: Item) => it.title);
+  return items.map(it => ({
+    label: it.datetime ? `${it.title} — ${fmtKyiv(it.datetime)}` : it.title,
+    create: () => createItem(it).then(c => c.message),
+  }));
 }
 
 // ─── Хендлери (по одному на дію — жодного if/else по типах) ──────
@@ -108,24 +124,18 @@ const HANDLERS: Record<string, Handler> = {
   },
 
   async propose_items(args) {
-    const items: Item[] = (Array.isArray(args.items) ? args.items : [])
-      .map((it: any): Item => ({
-        kind: (['event', 'task', 'note', 'reminder'].includes(it.kind) ? it.kind : 'task'),
-        title: String(it.title ?? '').trim(),
-        datetime: it.datetime ? ensureKyivTz(String(it.datetime)) : undefined,
-        duration_minutes: it.duration_minutes,
-        description: it.description,
-      }))
-      .filter((it: Item) => it.title);
+    const items = buildChecklist(args.items);
     if (!items.length) return { kind: 'observation', data: 'Немає чого запропонувати — придумай варіанти сам.' };
-    return {
-      kind: 'checklist',
-      card: String(args.intro || 'Познач галочками, що додати:'),
-      items: items.map(it => ({
-        label: it.datetime ? `${it.title} — ${fmtKyiv(it.datetime)}` : it.title,
-        create: () => createItem(it).then(c => c.message),
-      })),
-    };
+    return { kind: 'checklist', card: String(args.intro || 'Познач галочками, що додати:'), items };
+  },
+
+  async remember(args) {
+    const allowed = ['fact', 'preference', 'routine', 'person', 'place'];
+    const kind = allowed.includes(args.kind) ? args.kind : 'preference';
+    const fact = String(args.fact ?? '').trim();
+    if (!fact) return { kind: 'observation', data: 'Нема що запамʼятовувати.' };
+    db.prepare("INSERT INTO memories (kind, content, source) VALUES (?, ?, 'told')").run(kind, fact);
+    return { kind: 'done', message: `🧠 Запамʼятала: ${fact}` };
   },
 
   async query_schedule(args) {
@@ -270,6 +280,21 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: 'function',
     function: { name: 'list_reminders', description: 'Показати активні нагадування.', parameters: { type: 'object', properties: {} } },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'remember',
+      description: 'Запамʼятати стійкий факт/вподобання/звичку про користувача на майбутнє (напр. "не любить ранкові зустрічі", "зал зазвичай о 18", "працює віддалено"). Клич лише коли користувач повідомляє щось стале про себе, не для разових справ.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fact: { type: 'string', description: 'Коротко, від 3 особи: "любить бігати вранці"' },
+          kind: { type: 'string', enum: ['fact', 'preference', 'routine', 'person', 'place'] },
+        },
+        required: ['fact'],
+      },
+    },
   },
   {
     type: 'function',
