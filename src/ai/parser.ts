@@ -124,19 +124,20 @@ export function quickParse(text: string): ParsedIntent | null {
   const cleaned = normalize(text);
   const lower = cleaned.toLowerCase();
 
-  // CALENDAR QUERIES
-  if (
-    /що.{0,20}(сьогодні|сьогод|на день|в мене)/.test(lower) ||
-    /розклад.{0,15}(сьогодні|на день|на сьогодні)/.test(lower) ||
-    /план.{0,10}(на день|на сьогодні|сьогодні)/.test(lower) ||
-    /що.{0,5}(план|маю|заплановано)/.test(lower) ||
-    /^(сьогодні|на сьогодні|мій день|мій розклад|розклад|план на день)\??$/.test(lower)
-  ) return { type: 'query', title: '__today__' };
+  // CALENDAR QUERIES — тільки прості запити про розклад, без "запропонуй/порадь/придумай"
+  const isAiRequest = /запропону|порад|придума|що робити|що додати|крім|ідеї/.test(lower);
+  if (!isAiRequest) {
+    if (
+      /^(що|розклад|план).{0,25}(сьогодні|на день|сьогод)\??$/.test(lower) ||
+      /^(що|розклад|план).{0,10}(маю|заплановано)\??$/.test(lower) ||
+      /^(сьогодні|на сьогодні|мій день|мій розклад|розклад|план на день)\??$/.test(lower)
+    ) return { type: 'query', title: '__today__' };
 
-  if (/що.{0,15}завтра/.test(lower) || /розклад.{0,10}завтра/.test(lower) || /^завтра\??$/.test(lower))
-    return { type: 'query', title: '__tomorrow__' };
-  if (/що.{0,15}(тижн|тиждень|week)/.test(lower) || /розклад.{0,10}тижн/.test(lower))
-    return { type: 'query', title: '__week__' };
+    if (/^(що|розклад).{0,20}завтра\??$/.test(lower) || /^завтра\??$/.test(lower))
+      return { type: 'query', title: '__tomorrow__' };
+    if (/^(що|розклад).{0,20}(тижн|тиждень)\??$/.test(lower))
+      return { type: 'query', title: '__week__' };
+  }
 
   // ВІДМІНА / ПЕРЕНОС
   if (/^(відміни|скасуй|відмінити|undo)/.test(lower))
