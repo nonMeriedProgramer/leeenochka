@@ -13,8 +13,18 @@ import db from '../db/index.js';
 let pendingAction: { execute: () => Promise<string> } | null = null;     // ✅/❌ підтвердження
 let pendingUndo: (() => Promise<string>) | null = null;                    // ↩️ скасувати останнє
 let pendingOptions: Array<{ label: string; execute: () => Promise<string> }> | null = null; // вибір зі списку
+let pendingChecklist: { items: Array<{ label: string; create: () => Promise<string> }>; selected: boolean[] } | null = null;
 
-function clearPending() { pendingAction = null; pendingUndo = null; pendingOptions = null; }
+function clearPending() { pendingAction = null; pendingUndo = null; pendingOptions = null; pendingChecklist = null; }
+
+// Клавіатура чеклиста: ☐/☑ на кожен пункт + "➕ Додати"
+function checklistKeyboard(cl: NonNullable<typeof pendingChecklist>): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  cl.items.forEach((it, i) => kb.text(`${cl.selected[i] ? '☑' : '☐'} ${it.label}`, `toggle_${i}`).row());
+  const n = cl.selected.filter(Boolean).length;
+  kb.text(n ? `➕ Додати (${n})` : '➕ Додати', 'checklist_add').text('❌', 'confirm_no');
+  return kb;
+}
 
 export function createBot(token: string) {
   const bot = new Bot(token);
@@ -138,6 +148,25 @@ export function createBot(token: string) {
     } else if (data.startsWith('pick_') && pendingOptions) {
       const opt = pendingOptions[parseInt(data.slice(5))]; clearPending();
       if (opt) await run(opt.execute);
+    } else if (data.startsWith('toggle_') && pendingChecklist) {
+      const i = parseInt(data.slice(7));
+      if (i >= 0 && i < pendingChecklist.selected.length) {
+        pendingChecklist.selected[i] = !pendingChecklist.selected[i];
+        await ctx.editMessageReplyMarkup({ reply_markup: checklistKeyboard(pendingChecklist) }).catch(() => {});
+      }
+    } else if (data === 'checklist_add' && pendingChecklist) {
+      const cl = pendingChecklist; clearPending();
+      const chosen = cl.items.filter((_, i) => cl.selected[i]);
+      await ctx.editMessageReplyMarkup(undefined).catch(() => {});
+      if (!chosen.length) { await ctx.reply('Нічого не обрано.'); return; }
+      const results: string[] = [];
+      for (const it of chosen) {
+        try { results.push(await it.create()); }
+        catch (e) { results.push(`❌ ${it.label}: ${e instanceof Error ? e.message : 'помилка'}`); }
+      }
+      const msg = results.join('\n');
+      saveMessage('assistant', msg);
+      await ctx.reply(msg);
     } else if (data === 'confirm_no') {
       clearPending();
       await ctx.editMessageText('❌ Скасовано.').catch(() => {});
@@ -183,6 +212,10 @@ async function handleInput(ctx: any, text: string) {
       r.options.forEach((o, i) => kb.text(o.label, `pick_${i}`).row());
       kb.text('❌ Ні', 'confirm_no');
       await edit(r.card, kb);
+    } else if (r.kind === 'checklist') {
+      clearPending();
+      pendingChecklist = { items: r.items, selected: r.items.map(() => false) };
+      await edit(r.card, checklistKeyboard(pendingChecklist));
     } else if (r.undo) {
       clearPending();
       pendingUndo = r.undo;

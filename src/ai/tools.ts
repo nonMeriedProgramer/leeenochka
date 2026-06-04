@@ -16,7 +16,8 @@ export type ToolOutcome =
   | { kind: 'observation'; data: string }
   | { kind: 'done'; message: string; undo?: () => Promise<string> }
   | { kind: 'confirm'; card: string; execute: () => Promise<string> }
-  | { kind: 'ambiguous'; card: string; options: Array<{ label: string; execute: () => Promise<string> }> };
+  | { kind: 'ambiguous'; card: string; options: Array<{ label: string; execute: () => Promise<string> }> }
+  | { kind: 'checklist'; card: string; items: Array<{ label: string; create: () => Promise<string> }> };
 
 // ─── Хелпери таймзони/форматування ──────────────────────────────
 export function ensureKyivTz(dt: string): string {
@@ -35,44 +36,96 @@ function sameKyivDay(iso: string, ref: Date): boolean {
   return new Date(iso).toLocaleDateString('uk-UA', opt) === ref.toLocaleDateString('uk-UA', opt);
 }
 
+// ─── Єдиний creator: kind → виклик API (спільний для create-тулів і чеклиста) ──
+type ItemKind = 'event' | 'task' | 'note' | 'reminder';
+interface Item {
+  kind: ItemKind; title: string; datetime?: string;
+  duration_minutes?: number; priority?: 'high' | 'medium' | 'low'; description?: string;
+}
+
+async function createItem(item: Item): Promise<{ message: string; undo?: () => Promise<string> }> {
+  switch (item.kind) {
+    case 'event': {
+      if (!isCalendarConnected()) return { message: '⚠️ Calendar не підключено: /setup' };
+      const start = ensureKyivTz(String(item.datetime ?? ''));
+      const ev = await createEvent({
+        title: item.title, start,
+        durationMinutes: Number(item.duration_minutes) || 60, description: item.description,
+      });
+      return {
+        message: `✅ «${ev.title}» — ${fmtKyiv(start)}`,
+        undo: async () => { await deleteEvent(ev.href); return `↩️ Скасовано: «${ev.title}»`; },
+      };
+    }
+    case 'task': {
+      await createTask({
+        type: 'task', title: item.title,
+        deadline: item.datetime ? ensureKyivTz(String(item.datetime)) : undefined,
+        priority: item.priority, description: item.description,
+      });
+      return { message: `✅ Задача: «${item.title}»` };
+    }
+    case 'note': {
+      await createTask({ type: 'note', title: item.title, description: item.description });
+      return { message: `📝 Нотатка: «${item.title}»` };
+    }
+    case 'reminder': {
+      const due = ensureKyivTz(String(item.datetime ?? ''));
+      if (isRemindersConnected()) {
+        await createReminder({ title: item.title, due });
+        return { message: `⏰ «${item.title}» — ${fmtKyiv(due)}` };
+      }
+      db.prepare('INSERT INTO reminders (fire_at, text) VALUES (?, ?)').run(due, item.title);
+      return { message: `⏰ «${item.title}» — ${fmtKyiv(due)}` };
+    }
+    default:
+      return { message: `• ${item.title}` };
+  }
+}
+
 // ─── Хендлери (по одному на дію — жодного if/else по типах) ──────
 type Handler = (args: Record<string, any>) => Promise<ToolOutcome>;
 
 const HANDLERS: Record<string, Handler> = {
   async create_event(args) {
-    if (!isCalendarConnected()) return { kind: 'done', message: '⚠️ Спочатку підключи Apple Calendar: /setup' };
-    const start = ensureKyivTz(String(args.datetime ?? ''));
-    const duration = Number(args.duration_minutes) || 60;
-    const ev = await createEvent({ title: args.title, start, durationMinutes: duration, description: args.description });
-    return {
-      kind: 'done',
-      message: `✅ Додав «${ev.title}» — ${fmtKyiv(start)}`,
-      undo: async () => { await deleteEvent(ev.href); return `↩️ Скасовано: «${ev.title}»`; },
-    };
+    const c = await createItem({ kind: 'event', title: args.title, datetime: args.datetime, duration_minutes: args.duration_minutes, description: args.description });
+    return { kind: 'done', message: c.message, undo: c.undo };
   },
 
   async create_task(args) {
-    await createTask({
-      type: 'task', title: args.title,
-      deadline: args.deadline ? ensureKyivTz(String(args.deadline)) : undefined,
-      priority: args.priority, description: args.description,
-    });
-    return { kind: 'done', message: `✅ Задача в Notion: «${args.title}»` };
+    const c = await createItem({ kind: 'task', title: args.title, datetime: args.deadline, priority: args.priority, description: args.description });
+    return { kind: 'done', message: c.message };
   },
 
   async create_note(args) {
-    await createTask({ type: 'note', title: args.title, description: args.description });
-    return { kind: 'done', message: `📝 Нотатка в Notion: «${args.title}»` };
+    const c = await createItem({ kind: 'note', title: args.title, description: args.description });
+    return { kind: 'done', message: c.message };
   },
 
   async create_reminder(args) {
-    const due = ensureKyivTz(String(args.datetime ?? ''));
-    if (isRemindersConnected()) {
-      await createReminder({ title: args.title, due });
-      return { kind: 'done', message: `⏰ Нагадування в Apple Reminders: «${args.title}» — ${fmtKyiv(due)}` };
-    }
-    db.prepare('INSERT INTO reminders (fire_at, text) VALUES (?, ?)').run(due, args.title);
-    return { kind: 'done', message: `⏰ Нагадаю: «${args.title}» — ${fmtKyiv(due)}` };
+    const c = await createItem({ kind: 'reminder', title: args.title, datetime: args.datetime });
+    return { kind: 'done', message: c.message };
+  },
+
+  async propose_items(args) {
+    const items: Item[] = (Array.isArray(args.items) ? args.items : [])
+      .map((it: any): Item => ({
+        kind: (['event', 'task', 'note', 'reminder'].includes(it.kind) ? it.kind : 'task'),
+        title: String(it.title ?? '').trim(),
+        datetime: it.datetime ? ensureKyivTz(String(it.datetime)) : undefined,
+        duration_minutes: it.duration_minutes,
+        description: it.description,
+      }))
+      .filter((it: Item) => it.title);
+    if (!items.length) return { kind: 'observation', data: 'Немає чого запропонувати — придумай варіанти сам.' };
+    return {
+      kind: 'checklist',
+      card: String(args.intro || 'Познач галочками, що додати:'),
+      items: items.map(it => ({
+        label: it.datetime ? `${it.title} — ${fmtKyiv(it.datetime)}` : it.title,
+        create: () => createItem(it).then(c => c.message),
+      })),
+    };
   },
 
   async query_schedule(args) {
@@ -217,6 +270,34 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: 'function',
     function: { name: 'list_reminders', description: 'Показати активні нагадування.', parameters: { type: 'object', properties: {} } },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'propose_items',
+      description: 'Коли користувач просить ЗАПРОПОНУВАТИ / ПРИДУМАТИ / ПОРАДИТИ ідеї, справи, варіанти чи план — поверни список варіантів, з яких він сам познач галочками що додати. НЕ створюй їх одразу через create_*.',
+      parameters: {
+        type: 'object',
+        properties: {
+          intro: { type: 'string', description: 'Короткий вступ, напр. "Ідеї на вечір:"' },
+          items: {
+            type: 'array', description: '2–6 варіантів',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: 'Що саме (коротко)' },
+                kind: { type: 'string', enum: ['event', 'task', 'note', 'reminder'], description: 'event якщо є конкретний час, інакше task' },
+                datetime: { type: 'string', description: `Опційно, ${DT}` },
+                duration_minutes: { type: 'integer' },
+                description: { type: 'string' },
+              },
+              required: ['title', 'kind'],
+            },
+          },
+        },
+        required: ['items'],
+      },
+    },
   },
   {
     type: 'function',

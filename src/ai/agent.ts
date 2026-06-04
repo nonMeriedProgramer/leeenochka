@@ -6,7 +6,8 @@ import db from '../db/index.js';
 export type AgentResult =
   | { kind: 'done'; text: string; undo?: () => Promise<string> }
   | { kind: 'confirm'; card: string; execute: () => Promise<string> }
-  | { kind: 'ambiguous'; card: string; options: Array<{ label: string; execute: () => Promise<string> }> };
+  | { kind: 'ambiguous'; card: string; options: Array<{ label: string; execute: () => Promise<string> }> }
+  | { kind: 'checklist'; card: string; items: Array<{ label: string; create: () => Promise<string> }> };
 
 function safeParse(s: string | undefined): Record<string, any> {
   try { return JSON.parse(s || '{}'); } catch { return {}; }
@@ -19,6 +20,9 @@ function toResult(outcomes: ToolOutcome[]): AgentResult {
 
   const amb = outcomes.find((o): o is Extract<ToolOutcome, { kind: 'ambiguous' }> => o.kind === 'ambiguous');
   if (amb) return { kind: 'ambiguous', card: amb.card, options: amb.options };
+
+  const checklist = outcomes.find((o): o is Extract<ToolOutcome, { kind: 'checklist' }> => o.kind === 'checklist');
+  if (checklist) return { kind: 'checklist', card: checklist.card, items: checklist.items };
 
   const dones = outcomes.filter((o): o is Extract<ToolOutcome, { kind: 'done' }> => o.kind === 'done');
   const text = dones.map(d => d.message).join('\n') || 'Готово.';
