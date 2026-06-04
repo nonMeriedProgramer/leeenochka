@@ -52,7 +52,7 @@ export async function runAgent(userMessage: string): Promise<AgentResult> {
   let finalText = '';
   for (let i = 0; i < 3; i++) {
     const res = await client.chat.completions.create({
-      model, messages, tools: TOOLS, tool_choice: 'auto', temperature: 0.4, max_tokens: 600,
+      model, messages, tools: TOOLS, tool_choice: 'auto', temperature: 0.2, max_tokens: 600,
     });
     const msg = res.choices[0]?.message;
     if (!msg) break;
