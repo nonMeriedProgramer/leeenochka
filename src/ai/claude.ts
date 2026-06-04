@@ -44,6 +44,10 @@ export async function parseIntent(text: string): Promise<ParsedIntent | Compound
     if (!match) return { type: 'unknown', title: text };
     const parsed = JSON.parse(match[0]) as ParsedIntent;
     if (!parsed.type || parsed.type === 'unknown') return { type: 'unknown', title: text };
+    // AI повертає datetime без TZ — трактуємо як Kyiv (UTC+3)
+    if (parsed.datetime && !/Z|[+-]\d{2}:\d{2}$/.test(parsed.datetime)) {
+      parsed.datetime = parsed.datetime + '+03:00';
+    }
     return parsed;
   } catch {
     return { type: 'unknown', title: text };

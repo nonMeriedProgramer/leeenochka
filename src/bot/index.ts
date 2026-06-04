@@ -106,7 +106,7 @@ export function createBot(token: string) {
 
   // ─── /today ───────────────────────────────────────────────────
   bot.command('today', async (ctx) => {
-    if (!isCalendarConnected()) { await ctx.reply('Спочатку підключи Google Calendar: /connect'); return; }
+    if (!isCalendarConnected()) { await ctx.reply('Спочатку підключи Apple Calendar: /setup'); return; }
     try {
       const events = await getUpcomingEvents(1);
       if (!events.length) { await ctx.reply('📅 Сьогодні нічого немає.'); return; }
@@ -120,7 +120,7 @@ export function createBot(token: string) {
 
   // ─── /week ────────────────────────────────────────────────────
   bot.command('week', async (ctx) => {
-    if (!isCalendarConnected()) { await ctx.reply('Спочатку підключи Google Calendar: /connect'); return; }
+    if (!isCalendarConnected()) { await ctx.reply('Спочатку підключи Apple Calendar: /setup'); return; }
     try {
       const events = await getUpcomingEvents(7);
       if (!events.length) { await ctx.reply('📅 На тижні нічого немає.'); return; }
@@ -210,6 +210,30 @@ export function createBot(token: string) {
   return bot;
 }
 
+// ─── Helpers ────────────────────────────────────────────────────
+
+// Витягує ||{JSON}|| з відповіді AI, повертає чистий текст.
+// Якщо знайшов валідний JSON — встановлює pendingIntent і додає кнопки.
+function extractReply(ctx: any, thinking: any, reply: string, _pending: any): string {
+  const m = reply.match(/\|\|\s*(\{[\s\S]*?\})\s*\|\|/);
+  if (m) {
+    try {
+      const parsed = JSON.parse(m[1]) as ParsedIntent;
+      // normalize datetime: AI часто повертає без TZ — додаємо +03:00
+      if (parsed.datetime && !/[Z+\-]\d{2}:?\d{2}$/.test(parsed.datetime) && !parsed.datetime.endsWith('Z')) {
+        parsed.datetime = parsed.datetime + '+03:00';
+      }
+      pendingIntent = parsed;
+      const kb = new InlineKeyboard().text('✅ Так', 'confirm_yes').text('❌ Ні', 'confirm_no');
+      const cleanText = reply.replace(m[0], '').trim() || formatConfirmation(parsed);
+      ctx.api.editMessageText(ctx.chat.id, thinking.message_id, cleanText,
+        { parse_mode: 'Markdown', reply_markup: kb }).catch(() => {});
+      return cleanText;
+    } catch {}
+  }
+  return reply.replace(/\|\|[\s\S]*?\|\|/g, '').trim() || reply;
+}
+
 // ─── Core logic ─────────────────────────────────────────────────
 
 async function handleInput(ctx: any, text: string) {
@@ -217,7 +241,6 @@ async function handleInput(ctx: any, text: string) {
 
   try {
     const intent = await parseIntent(text);
-    saveMessage('user', text);
 
     if ('type' in intent && intent.type === 'compound') {
       const lines = intent.events.map((e, i) => {
@@ -248,9 +271,13 @@ async function handleInput(ctx: any, text: string) {
       }
       if (intent.title === '__tomorrow__') {
         const events = await getUpcomingEvents(2);
-        const tomorrow = events.filter(e => { const d = new Date(e.start); const t = new Date(); return d.getDate() !== t.getDate(); });
-        if (!tomorrow.length) { await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, '📅 Завтра нічого немає.'); return; }
-        const lines = tomorrow.map(e => { const t = new Date(e.start).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Kyiv' }); return `• ${t} ${e.title}`; });
+        const tomorrowKyiv = new Date(Date.now() + 24 * 3600000)
+          .toLocaleDateString('uk-UA', { timeZone: 'Europe/Kyiv' });
+        const filtered = events.filter(e =>
+          e.start && new Date(e.start).toLocaleDateString('uk-UA', { timeZone: 'Europe/Kyiv' }) === tomorrowKyiv
+        );
+        if (!filtered.length) { await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, '📅 Завтра нічого немає.'); return; }
+        const lines = filtered.map(e => { const t = new Date(e.start).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Kyiv' }); return `• ${t} ${e.title}`; });
         await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, `📅 *Завтра:*\n${lines.join('\n')}`, { parse_mode: 'Markdown' });
         return;
       }
@@ -275,34 +302,14 @@ async function handleInput(ctx: any, text: string) {
         return;
       }
       // Загальний query — через AI
-      const reply = await chat(text); // saveMessage вже всередині chat()
-
-      // Витягуємо ||{...}|| якщо Gemini зібрав деталі події
-      const s = reply.indexOf('||');
-      const e = reply.lastIndexOf('||');
-      if (s !== -1 && e > s + 2) {
-        const jsonStr = reply.slice(s + 2, e).trim();
-        const cleanReply = reply.slice(0, s).trim();
-        try {
-          const parsed = JSON.parse(jsonStr) as ParsedIntent;
-          pendingIntent = parsed;
-          const kb = new InlineKeyboard().text('✅ Так', 'confirm_yes').text('❌ Ні', 'confirm_no');
-          await ctx.api.editMessageText(ctx.chat.id, thinking.message_id,
-            cleanReply || formatConfirmation(parsed),
-            { parse_mode: 'Markdown', reply_markup: kb });
-          return;
-        } catch { /* JSON невалідний — показуємо без JSON */ }
-      }
-
-      // Прибираємо будь-які залишки ||...|| перед відображенням
-      const cleanReply2 = reply.replace(/\|\|[\s\S]*?\|\|/g, '').trim();
-      await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, cleanReply2 || reply);
+      const reply = await chat(text);
+      await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, extractReply(ctx, thinking, reply, pendingIntent));
       return;
     }
 
     if (intent.type === 'unknown') {
       const reply = await chat(text);
-      await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, reply);
+      await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, extractReply(ctx, thinking, reply, pendingIntent));
       return;
     }
 

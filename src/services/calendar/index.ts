@@ -193,7 +193,8 @@ export async function getUpcomingEvents(days = 1): Promise<Array<{ title: string
   if (!isCalendarConnected()) return [];
   try {
     const calUrl = await getCalendarUrl();
-    const now = new Date(); now.setHours(0, 0, 0, 0);
+    // Опівніч у Kyiv (UTC+3)
+    const now = new Date(new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' }) + 'T00:00:00+03:00');
     const end = new Date(now.getTime() + days * 24 * 3600000);
     const fmt = (d: Date) => d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
 
@@ -229,7 +230,7 @@ export async function findFreeSlot(durationMinutes: number, afterDate = new Date
   const m = c.getMinutes();
   if (m > 0) c.setMinutes(m <= 30 ? 30 : 60, 0, 0);
   for (let i = 0; i < 48 * 7; i++) {
-    const h = c.getHours();
+    const h = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Kyiv', hour: 'numeric', hour12: false }).format(c));
     if (h >= 9 && h < 18) {
       const e = new Date(c.getTime() + durationMinutes * 60000);
       if (!events.some(ev => { const s = new Date(ev.start).getTime(), en = new Date(ev.end).getTime(); return !isNaN(s) && c.getTime() < en && e.getTime() > s; })) return c;
