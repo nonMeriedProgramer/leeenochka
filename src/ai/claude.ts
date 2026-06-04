@@ -55,17 +55,37 @@ export async function parseIntent(text: string): Promise<ParsedIntent | Compound
 }
 
 const CHAT_SYSTEM = `Ти — Leeenochka, персональний AI-асистент. Відповідай українською, коротко.
-Якщо користувач хоче запланувати подію і ти зібрав всі деталі (назва, дата, час) — підтверди словами типу "Записую: [назва] [дата] о [час]. Підтвердити?" і ОБОВ'ЯЗКОВО в кінці додай JSON у форматі:
-||{"type":"event","title":"...","datetime":"ISO8601","duration":60}||
-Якщо деталей ще не вистачає — уточнюй. Не вигадуй деталі.`;
+Якщо отримуєш КАЛЕНДАР КОРИСТУВАЧА — використовуй ці реальні дані щоб відповісти на питання про розклад.
+Якщо користувач хоче запланувати подію і ти зібрав всі деталі (назва, дата, час) — підтверди і ОБОВ'ЯЗКОВО в кінці додай JSON:
+||{"type":"event","title":"...","datetime":"ISO8601+03:00","duration":60}||
+Якщо деталей не вистачає — уточнюй. Не вигадуй деталі яких немає.`;
+
+// Підтягує події з календаря якщо питання про розклад
+async function fetchCalendarContext(msg: string): Promise<string> {
+  const lower = msg.toLowerCase();
+  if (!/розклад|план|сьогодні|завтра|тижн|календар|на день|що маю|що в мене/.test(lower)) return '';
+  try {
+    const { isCalendarConnected, getUpcomingEvents } = await import('../services/calendar/index.js');
+    if (!isCalendarConnected()) return '';
+    const events = await getUpcomingEvents(7);
+    if (!events.length) return '\n\nКАЛЕНДАР: подій не знайдено.';
+    const lines = events.map(e =>
+      `- ${new Date(e.start).toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv', dateStyle: 'short', timeStyle: 'short' })} — ${e.title}`
+    );
+    return `\n\nКАЛЕНДАР КОРИСТУВАЧА (7 днів):\n${lines.join('\n')}`;
+  } catch { return ''; }
+}
 
 export async function chat(userMessage: string): Promise<string> {
   const history = (db.prepare(
     'SELECT role, content FROM messages ORDER BY id DESC LIMIT 10'
   ).all() as Array<{ role: string; content: string }>).reverse();
 
+  const calendarCtx = await fetchCalendarContext(userMessage);
+  const systemContent = CHAT_SYSTEM + calendarCtx;
+
   const messages: OpenAI.ChatCompletionMessageParam[] = [
-    { role: 'system', content: CHAT_SYSTEM },
+    { role: 'system', content: systemContent },
     ...history.map(m => ({
       role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
       content: m.content,
