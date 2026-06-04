@@ -109,7 +109,9 @@ export async function chat(userMessage: string): Promise<string> {
     { role: 'user', content: userMessage },
   ];
 
-  const res = await groq().chat.completions.create({ model: CHAT_MODEL, messages, temperature: 0.7, max_tokens: 500 });
+  const res = await (process.env.GROQ_API_KEY
+    ? groq().chat.completions.create({ model: CHAT_MODEL, messages, temperature: 0.7, max_tokens: 500 })
+    : freemodel().chat.completions.create({ model: PARSE_MODEL, messages, temperature: 0.7, max_tokens: 500 }));
   const text = res.choices[0]?.message?.content ?? '';
 
   saveMessage('user', userMessage);
