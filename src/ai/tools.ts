@@ -152,12 +152,12 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
-      name: 'create_event', description: 'Створити подію в Apple Calendar (зустріч, тренування, прийом — те, що має конкретний час).',
+      name: 'create_event', description: 'Створити подію в Apple Calendar (зустріч, тренування, прийом — те, що має конкретний час). title — ЩО відбувається (наприклад "Зал", "Дзвінок з Андрієм"). "вечір", "ранок", "завтра" — це datetime, не title.',
       parameters: {
         type: 'object',
         properties: {
-          title: { type: 'string', description: 'Назва події' },
-          datetime: { type: 'string', description: `Початок, ${DT}` },
+          title: { type: 'string', description: 'Назва події — ЩО відбувається, не час і не дата' },
+          datetime: { type: 'string', description: `Початок, ${DT}. "вечір"=19:00, "ранок"=9:00, "обід"=13:00, "ніч"=22:00` },
           duration_minutes: { type: 'integer', description: 'Тривалість у хвилинах (за замовч. 60)' },
           description: { type: 'string' },
         },
@@ -236,7 +236,7 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       parameters: {
         type: 'object',
         properties: {
-          title_query: { type: 'string', description: 'Частина назви події, яку переносимо' },
+          title_query: { type: 'string', description: 'Частина назви події з ПОТОЧНОГО повідомлення користувача, не з контексту' },
           new_datetime: { type: 'string', description: `Новий час, ${DT}` },
         },
         required: ['title_query', 'new_datetime'],
@@ -249,7 +249,7 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       name: 'cancel_event', description: 'Відмінити/видалити подію з календаря.',
       parameters: {
         type: 'object',
-        properties: { title_query: { type: 'string', description: 'Частина назви події, яку видаляємо' } },
+        properties: { title_query: { type: 'string', description: 'Частина назви події з ПОТОЧНОГО повідомлення користувача, не з контексту' } },
         required: ['title_query'],
       },
     },
