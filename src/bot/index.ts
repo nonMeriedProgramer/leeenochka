@@ -254,6 +254,19 @@ async function handleInput(ctx: any, text: string) {
         await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, `📅 *Завтра:*\n${lines.join('\n')}`, { parse_mode: 'Markdown' });
         return;
       }
+      if (intent.title === '__undo__') {
+        if (lastUndoData) {
+          await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, `↩️ Відміна поки в розробці. Видали вручну в Calendar.`);
+          lastUndoData = null;
+        } else {
+          await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, 'Нічого відміняти.');
+        }
+        return;
+      }
+      if (intent.title === '__reschedule__') {
+        await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, '⚠️ Перенесення подій поки не підтримується.\nВидали стару подію вручну і створи нову.');
+        return;
+      }
       if (intent.title === '__week__') {
         const events = await getUpcomingEvents(7);
         if (!events.length) { await ctx.api.editMessageText(ctx.chat.id, thinking.message_id, '📅 На тижні нічого немає.'); return; }

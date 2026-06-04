@@ -33,13 +33,13 @@ function extractDateTime(text: string): { datetime: string | null; duration: num
     lower.match(/(?:о|в)\s*(\d{1,2})(?!\d|:)/);
 
   let datetime: string | null = null;
-  // Якщо є точний час — перезаписуємо
   if (timeMatch) {
     const h = parseInt(timeMatch[1]);
     const m = parseInt(timeMatch[2] ?? '0');
     baseDate.setHours(h, m, 0, 0);
+    // Сервер в UTC, користувач думає в Kyiv (UTC+3) — зсуваємо на -3год
+    baseDate = new Date(baseDate.getTime() - 3 * 3600000);
   }
-  // Якщо час доби або точний час — маємо datetime
   const hasTimeOfDay = /вранці|на ранок|зранку|в обід|на обід|опівдні|ввечері|на вечір|увечері|вечором|вночі|на ніч/.test(lower);
   if (timeMatch || hasTimeOfDay) {
     datetime = baseDate.toISOString();
@@ -128,6 +128,16 @@ export function quickParse(text: string): ParsedIntent | null {
     const title = cleaned.replace(/^нагадай\s*/i, '').replace(/(?:о|в)\s*\d{1,2}(?::\d{2})?/i, '').trim();
     if (!datetime) return null;
     return { type: 'reminder', title, datetime };
+  }
+
+  // ВІДМІНА
+  if (/^(відміни|скасуй|відмінити|undo)/.test(lower)) {
+    return { type: 'query', title: '__undo__' };
+  }
+
+  // ПЕРЕНЕСТИ ПОДІЮ — поки не підтримується
+  if (/перенес|перенос|змін.{0,5}час|посунь/.test(lower)) {
+    return { type: 'query', title: '__reschedule__' };
   }
 
   // НОТАТКА → Notion
