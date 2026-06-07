@@ -72,11 +72,44 @@ async function maybeMorningBrief(bot: Bot) {
   } catch { /* без ідей — не критично */ }
 }
 
+// ─── Нагадування про події календаря (за LEAD хв до початку) ────
+const LEAD_MIN = Number(process.env.CALENDAR_LEAD_MINUTES) || 15;
+const LEAD_MS = LEAD_MIN * 60_000;
+const notifiedEvents = new Map<string, number>(); // ключ події -> startMs (дедуплікація)
+
+async function fireCalendarReminders(bot: Bot) {
+  const owner = ownerId();
+  if (!owner || !isCalendarConnected()) return;
+
+  const now = Date.now();
+  // прибираємо старі ключі, щоб мапа не росла безкінечно
+  for (const [k, ms] of notifiedEvents) if (ms < now - 3600_000) notifiedEvents.delete(k);
+
+  for (const e of await getUpcomingEvents(1)) {
+    if (!e.start || e.start.length <= 10) continue;       // пропускаємо події «на весь день»
+    const startMs = new Date(e.start).getTime();
+    if (!Number.isFinite(startMs)) continue;
+    const delta = startMs - now;
+    if (delta > LEAD_MS || delta < -60_000) continue;     // лише вікно [−1 хв; +LEAD хв]
+
+    const key = `${e.start}|${e.title}`;
+    if (notifiedEvents.has(key)) continue;
+    notifiedEvents.set(key, startMs);
+
+    const mins = Math.round(delta / 60_000);
+    const when = mins <= 0 ? 'починається' : `через ${mins} хв`;
+    try {
+      await bot.api.sendMessage(owner, `🔔 Подія ${when}: «${e.title}» о ${timeKyiv(e.start)}`);
+    } catch { notifiedEvents.delete(key); /* повторимо наступного тіку */ }
+  }
+}
+
 export function startScheduler(bot: Bot) {
   const tick = async () => {
     try { await fireDueReminders(bot); } catch { /* ignore */ }
+    try { await fireCalendarReminders(bot); } catch { /* ignore */ }
     try { await maybeMorningBrief(bot); } catch { /* ignore */ }
   };
   setInterval(tick, TICK_MS);
-  console.log('⏰ Scheduler started (reminders + morning brief)');
+  console.log('⏰ Scheduler started (reminders + calendar + morning brief)');
 }
