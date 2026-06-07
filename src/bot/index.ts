@@ -195,7 +195,8 @@ export function createBot(token: string) {
       const text = await transcribeAudio(file);
       await ctx.api.editMessageText(ctx.chat.id, wait.message_id, `📝 "${text}"`);
       await handleInput(ctx, text);
-    } catch {
+    } catch (e) {
+      console.error('Voice transcription failed:', e);
       await ctx.api.editMessageText(ctx.chat.id, wait.message_id, '❌ Не вдалось розпізнати голос.');
     }
   });

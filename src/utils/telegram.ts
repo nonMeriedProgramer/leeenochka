@@ -11,7 +11,7 @@ export async function downloadVoice(api: Api, fileId: string): Promise<string> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to download: ${res.status}`);
 
-  const filePath = path.join(os.tmpdir(), `voice_${fileId}.oga`);
+  const filePath = path.join(os.tmpdir(), `voice_${fileId}.ogg`);
   const writer = createWriteStream(filePath);
   await pipeline(res.body as never, writer);
   return filePath;
