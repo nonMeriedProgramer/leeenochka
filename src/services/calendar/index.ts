@@ -142,8 +142,8 @@ function put(url: string, body: string): Promise<void> {
   });
 }
 
-// За скільки хвилин до події дзвонить нативна оповістка iPhone (Apple Calendar)
-const ALARM_LEAD_MIN = Number(process.env.EVENT_ALARM_MINUTES) || 15;
+// За скільки хвилин до події дзвонить нативна оповістка iPhone (Apple Calendar) — за годину
+const ALARM_LEAD_MIN = Number(process.env.EVENT_ALARM_MINUTES) || 60;
 
 function toICS(uid: string, title: string, start: Date, end: Date, description?: string): string {
   const fmt = (d: Date) => d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
