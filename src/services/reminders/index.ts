@@ -143,6 +143,12 @@ function toVTODO(uid: string, title: string, due?: Date, notes?: string): string
     'STATUS:NEEDS-ACTION',
     due ? `DUE:${fmt(due)}` : '',
     notes ? `DESCRIPTION:${esc(notes)}` : '',
+    // Нативна оповістка Apple Reminders у момент дедлайну (лише якщо є due)
+    due ? 'BEGIN:VALARM' : '',
+    due ? 'ACTION:DISPLAY' : '',
+    due ? `DESCRIPTION:${esc(title)}` : '',
+    due ? `TRIGGER;VALUE=DATE-TIME:${fmt(due)}` : '',
+    due ? 'END:VALARM' : '',
     'END:VTODO',
     'END:VCALENDAR',
     '',
