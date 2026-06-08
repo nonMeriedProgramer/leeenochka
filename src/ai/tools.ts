@@ -58,12 +58,15 @@ async function createItem(item: Item): Promise<{ message: string; undo?: () => P
       };
     }
     case 'task': {
+      const deadline = item.datetime ? ensureKyivTz(String(item.datetime)) : undefined;
       await createTask({
         type: 'task', title: item.title,
-        deadline: item.datetime ? ensureKyivTz(String(item.datetime)) : undefined,
+        deadline,
         priority: item.priority, description: item.description,
       });
-      return { message: `✅ Задача: «${item.title}»` };
+      // Якщо є дедлайн — плануємо пінг у Telegram (інакше задача нікого не нагадає)
+      if (deadline) db.prepare('INSERT INTO reminders (fire_at, text) VALUES (?, ?)').run(deadline, item.title);
+      return { message: deadline ? `✅ Задача: «${item.title}» — нагадаю ${fmtKyiv(deadline)}` : `✅ Задача: «${item.title}»` };
     }
     case 'note': {
       await createTask({ type: 'note', title: item.title, description: item.description });
@@ -231,7 +234,7 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
-      name: 'create_task', description: 'Створити задачу (todo) в Notion — справа без конкретного часу.',
+      name: 'create_task', description: 'Створити задачу (todo) в Notion. Якщо вказано дедлайн — нагадаю про неї в той час.',
       parameters: {
         type: 'object',
         properties: {
