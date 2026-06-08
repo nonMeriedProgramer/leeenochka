@@ -11,11 +11,20 @@ import db from '../db/index.js';
 
 // Очікувані дії (бот однокористувацький — owner-only, module-level стан ок)
 let pendingAction: { execute: () => Promise<string> } | null = null;     // ✅/❌ підтвердження
-let pendingUndo: (() => Promise<string>) | null = null;                    // ↩️ скасувати останнє
 let pendingOptions: Array<{ label: string; execute: () => Promise<string> }> | null = null; // вибір зі списку
 let pendingChecklist: { items: Array<{ label: string; create: () => Promise<string> }>; selected: boolean[] } | null = null;
 
-function clearPending() { pendingAction = null; pendingUndo = null; pendingOptions = null; pendingChecklist = null; }
+// Кожне створення реєструє свій undo під унікальним id → кнопка «Скасувати» відміняє саме свою подію, а не останню
+const pendingUndos = new Map<string, () => Promise<string>>();
+let undoSeq = 0;
+function addUndo(fn: () => Promise<string>): string {
+  const id = String(++undoSeq);
+  pendingUndos.set(id, fn);
+  if (pendingUndos.size > 50) { const k = pendingUndos.keys().next().value; if (k !== undefined) pendingUndos.delete(k); } // обмежуємо памʼять
+  return id;
+}
+
+function clearPending() { pendingAction = null; pendingOptions = null; pendingChecklist = null; }
 
 // Клавіатура чеклиста: ☐/☑ на кожен пункт + "➕ Додати"
 function checklistKeyboard(cl: NonNullable<typeof pendingChecklist>): InlineKeyboard {
@@ -154,8 +163,10 @@ export function createBot(token: string) {
 
     if (data === 'confirm_yes' && pendingAction) {
       const exec = pendingAction.execute; clearPending(); await run(exec);
-    } else if (data === 'undo_last' && pendingUndo) {
-      const undo = pendingUndo; clearPending(); await run(undo);
+    } else if (data.startsWith('undo_')) {
+      const id = data.slice(5);
+      const undo = pendingUndos.get(id);
+      if (undo) { pendingUndos.delete(id); await run(undo); }
     } else if (data.startsWith('pick_') && pendingOptions) {
       const opt = pendingOptions[parseInt(data.slice(5))]; clearPending();
       if (opt) await run(opt.execute);
@@ -230,8 +241,8 @@ async function handleInput(ctx: any, text: string) {
       await edit(r.card, checklistKeyboard(pendingChecklist));
     } else if (r.undo) {
       clearPending();
-      pendingUndo = r.undo;
-      await edit(r.text, new InlineKeyboard().text('↩️ Скасувати', 'undo_last'));
+      const id = addUndo(r.undo);
+      await edit(r.text, new InlineKeyboard().text('↩️ Скасувати', `undo_${id}`));
     } else {
       clearPending();
       await edit(r.text);
