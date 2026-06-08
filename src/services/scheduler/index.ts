@@ -99,7 +99,8 @@ async function fireCalendarReminders(bot: Bot) {
     const mins = Math.round(delta / 60_000);
     const when = mins <= 0 ? 'починається' : `через ${mins} хв`;
     try {
-      await bot.api.sendMessage(owner, `🔔 Подія ${when}: «${e.title}» о ${timeKyiv(e.start)}`);
+      // беззвучно: айфон уже дзвонить нативно (за годину), цей пінг — тихе нагадування за 15 хв
+      await bot.api.sendMessage(owner, `🔔 Подія ${when}: «${e.title}» о ${timeKyiv(e.start)}`, { disable_notification: true });
     } catch { notifiedEvents.delete(key); /* повторимо наступного тіку */ }
   }
 }
