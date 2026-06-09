@@ -37,6 +37,14 @@ function sameKyivDay(iso: string, ref: Date): boolean {
   return new Date(iso).toLocaleDateString('uk-UA', opt) === ref.toLocaleDateString('uk-UA', opt);
 }
 
+// Українське відмінювання за числом: 1→one, 2-4→few, 5+→many (з урахуванням 11-14)
+function plural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
+
 // ─── Єдиний creator: kind → виклик API (спільний для create-тулів і чеклиста) ──
 type ItemKind = 'event' | 'task' | 'note' | 'reminder';
 interface Item {
@@ -215,7 +223,7 @@ const HANDLERS: Record<string, Handler> = {
       if (rec) addRecurring({ category, title, day });
       cats.add(category); n++;
     }
-    return { kind: 'done', message: `🗂 Заллято ${n} пунктів у ${cats.size} категорій. Відкрий /plan` };
+    return { kind: 'done', message: `🗂 Залито ${n} ${plural(n, 'пункт', 'пункти', 'пунктів')} у ${cats.size} ${plural(cats.size, 'категорію', 'категорії', 'категорій')}. Відкрий /plan` };
   },
 
   async plan_add(args) {
