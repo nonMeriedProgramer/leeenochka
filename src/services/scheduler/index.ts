@@ -1,8 +1,9 @@
 import type { Bot } from 'grammy';
 import db from '../../db/index.js';
-import { presentChecklist } from '../../bot/index.js';
+import { presentChecklist, sendPlanBoard, sendWeeklyReport, sendPlanPrompt } from '../../bot/index.js';
 import { generateIdeas } from '../../ai/agent.js';
 import { isCalendarConnected, getUpcomingEvents } from '../calendar/index.js';
+import { kyivWeekStart, closePastWeeks, ensureWeekSeeded } from '../plan/index.js';
 
 const TICK_MS = 30_000; // перевірка кожні 30с
 
@@ -12,13 +13,13 @@ function ownerId(): number | null {
 }
 
 // Поточний час у Києві
-function kyivNow(): { hour: number; minute: number; date: string } {
+function kyivNow(): { hour: number; minute: number; date: string; weekday: string } {
   const p = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Europe/Kyiv', hour12: false,
+    timeZone: 'Europe/Kyiv', hour12: false, weekday: 'short',
     year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
   }).formatToParts(new Date());
   const g = (t: string) => p.find(x => x.type === t)?.value ?? '';
-  return { hour: Number(g('hour')), minute: Number(g('minute')), date: `${g('year')}-${g('month')}-${g('day')}` };
+  return { hour: Number(g('hour')), minute: Number(g('minute')), date: `${g('year')}-${g('month')}-${g('day')}`, weekday: g('weekday') };
 }
 
 function timeKyiv(iso: string): string {
@@ -105,12 +106,54 @@ async function fireCalendarReminders(bot: Bot) {
   }
 }
 
+// ─── Тижневий план: ранкова дошка / звіт / нагадування ──────────
+let lastPlanBoardDate = '';
+async function maybePlanBoard(bot: Bot) {
+  const owner = ownerId();
+  if (!owner) return;
+  const { hour, minute, date } = kyivNow();
+  if (hour !== 8 || minute > 5 || lastPlanBoardDate === date) return;
+  lastPlanBoardDate = date;
+  try { await sendPlanBoard(bot, owner, true); } catch { /* ignore */ }
+}
+
+let lastReportDate = '';
+async function maybeWeeklyReport(bot: Bot) {
+  const owner = ownerId();
+  if (!owner) return;
+  const { hour, minute, date, weekday } = kyivNow();
+  if (weekday !== 'Sun' || hour !== 18 || minute > 5 || lastReportDate === date) return;
+  lastReportDate = date;
+  try { await sendWeeklyReport(bot, owner); } catch { /* ignore */ }
+}
+
+let lastPlanPromptDate = '';
+async function maybePlanPrompt(bot: Bot) {
+  const owner = ownerId();
+  if (!owner) return;
+  const { hour, minute, date, weekday } = kyivNow();
+  if (weekday !== 'Sun' || hour !== 20 || minute > 5 || lastPlanPromptDate === date) return;
+  lastPlanPromptDate = date;
+  try { await sendPlanPrompt(bot, owner); } catch { /* ignore */ }
+}
+
+// Ролл тижня — ідемпотентно щотіку: зафіксувати минулі тижні (знімок) + засіяти повтори
+function rollWeek() {
+  const ws = kyivWeekStart();
+  closePastWeeks(ws);
+  ensureWeekSeeded(ws);
+}
+
 export function startScheduler(bot: Bot) {
   const tick = async () => {
+    try { rollWeek(); } catch { /* ignore */ }
     try { await fireDueReminders(bot); } catch { /* ignore */ }
     try { await fireCalendarReminders(bot); } catch { /* ignore */ }
     try { await maybeMorningBrief(bot); } catch { /* ignore */ }
+    try { await maybePlanBoard(bot); } catch { /* ignore */ }
+    try { await maybeWeeklyReport(bot); } catch { /* ignore */ }
+    try { await maybePlanPrompt(bot); } catch { /* ignore */ }
   };
   setInterval(tick, TICK_MS);
-  console.log('⏰ Scheduler started (reminders + calendar + morning brief)');
+  console.log('⏰ Scheduler started (reminders + calendar + brief + plan)');
 }

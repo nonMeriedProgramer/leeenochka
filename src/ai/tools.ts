@@ -6,6 +6,7 @@ import {
 import { createReminder, getReminders, isRemindersConnected } from '../services/reminders/index.js';
 import { createTask } from '../services/notion/index.js';
 import db from '../db/index.js';
+import { addPlanItem, addRecurring, dayKeyFromText, findItemByTitle, makeRecurring, togglePlanItem } from '../services/plan/index.js';
 
 // ─── Результат виклику інструмента ──────────────────────────────
 // observation — дані назад моделі (read), цикл триває
@@ -198,6 +199,50 @@ const HANDLERS: Record<string, Handler> = {
       options: matches.map(m => ({ label: `${m.title} — ${fmtKyiv(m.start)}`, execute: move(m) })),
     };
   },
+
+  // ─── Тижневий план ────────────────────────────────────────────
+  async plan_seed(args) {
+    const raw = Array.isArray(args.items) ? args.items : [];
+    if (!raw.length) return { kind: 'done', message: 'Нема що додавати в план.' };
+    const cats = new Set<string>(); let n = 0;
+    for (const it of raw) {
+      const title = String(it.title ?? '').trim();
+      if (!title) continue;
+      const category = String(it.category ?? '').trim() || 'Інше';
+      const day = dayKeyFromText(it.day);
+      const rec = it.recurring ? 1 : 0;
+      addPlanItem({ category, title, day, recurring: rec });
+      if (rec) addRecurring({ category, title, day });
+      cats.add(category); n++;
+    }
+    return { kind: 'done', message: `🗂 Заллято ${n} пунктів у ${cats.size} категорій. Відкрий /plan` };
+  },
+
+  async plan_add(args) {
+    const title = String(args.title ?? '').trim();
+    if (!title) return { kind: 'done', message: 'Що додати в план?' };
+    const category = String(args.category ?? '').trim() || 'Інше';
+    const day = dayKeyFromText(args.day);
+    const rec = args.recurring ? 1 : 0;
+    addPlanItem({ category, title, day, recurring: rec });
+    if (rec) addRecurring({ category, title, day });
+    return { kind: 'done', message: `➕ У план: «${title}» (${category}${rec ? ', 🔁 щотижня' : ''}). /plan` };
+  },
+
+  async plan_repeat(args) {
+    const item = findItemByTitle(String(args.title_query ?? ''));
+    if (!item) return { kind: 'done', message: `Не знайшов у плані «${args.title_query}».` };
+    makeRecurring(item.id);
+    return { kind: 'done', message: `🔁 «${item.title}» тепер щотижнева.` };
+  },
+
+  async plan_done(args) {
+    const item = findItemByTitle(String(args.title_query ?? ''));
+    if (!item) return { kind: 'done', message: `Не знайшов у плані «${args.title_query}».` };
+    if (item.done) return { kind: 'done', message: `«${item.title}» вже виконано.` };
+    togglePlanItem(item.id);
+    return { kind: 'done', message: `✅ Виконано: «${item.title}»` };
+  },
 };
 
 // Єдиний диспетч — без if/else по типах
@@ -361,6 +406,65 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
         properties: { title_query: { type: 'string', description: 'Частина назви події з ПОТОЧНОГО повідомлення користувача, не з контексту' } },
         required: ['title_query'],
       },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'plan_seed',
+      description: 'Залити цілий ТИЖНЕВИЙ ПЛАН зі вставленого користувачем тексту-списку. Заголовки (Робота/Життя/Спорт/Особисте тощо) = category, рядки під ними = окремі пункти. День у тексті ("вівторок", "середа") → day. "щотижня/щочетверга/завжди/кожен тиждень" → recurring=true. Клич, коли користувач дає список планів на тиждень.',
+      parameters: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array', description: 'Усі пункти плану',
+            items: {
+              type: 'object',
+              properties: {
+                category: { type: 'string', description: 'Категорія із заголовка списку' },
+                title: { type: 'string', description: 'Сам пункт' },
+                day: { type: 'string', description: 'Опційно: день тижня українською, якщо вказано' },
+                recurring: { type: 'boolean', description: 'true якщо це стандартна щотижнева справа' },
+              },
+              required: ['category', 'title'],
+            },
+          },
+        },
+        required: ['items'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'plan_add',
+      description: 'Додати ОДИН пункт у тижневий план (не подію і не нагадування — пункт чеклиста на тиждень).',
+      parameters: {
+        type: 'object',
+        properties: {
+          category: { type: 'string', description: 'Категорія, напр. Робота/Спорт' },
+          title: { type: 'string' },
+          day: { type: 'string', description: 'Опційно: день тижня українською' },
+          recurring: { type: 'boolean', description: 'true якщо повторюється щотижня' },
+        },
+        required: ['category', 'title'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'plan_repeat',
+      description: 'Зробити наявний пункт тижневого плану щотижневим (повторюваним).',
+      parameters: { type: 'object', properties: { title_query: { type: 'string', description: 'Частина назви пункту' } }, required: ['title_query'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'plan_done',
+      description: 'Відмітити пункт тижневого плану виконаним за назвою.',
+      parameters: { type: 'object', properties: { title_query: { type: 'string', description: 'Частина назви пункту' } }, required: ['title_query'] },
     },
   },
 ];
