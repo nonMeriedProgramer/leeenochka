@@ -163,3 +163,11 @@ export function bar(pct: number, width = 5): string {
   const f = Math.max(0, Math.min(width, Math.round((pct / 100) * width)));
   return '▓'.repeat(f) + '░'.repeat(width - f);
 }
+
+// Українське відмінювання за числом: 1→one, 2-4→few, 5+→many (з урахуванням 11-14)
+export function plural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}

@@ -11,7 +11,7 @@ import db from '../db/index.js';
 import {
   type Day, type PlanItem, DAY_ORDER, dayUk, todayDayKey, kyivWeekStart, nextWeekStart,
   getWeekItems, togglePlanItem, categoriesOf, weekScore, trendAndStreak,
-  carryables, carryItems, ensureWeekSeeded, PLAN_GOAL_PCT, bar,
+  carryables, carryItems, ensureWeekSeeded, PLAN_GOAL_PCT, bar, plural,
 } from '../services/plan/index.js';
 
 // Очікувані дії (бот однокористувацький — owner-only, module-level стан ок)
@@ -159,7 +159,7 @@ export async function sendPlanPrompt(bot: Bot, chatId: number): Promise<void> {
   const kb = new InlineKeyboard();
   if (m) kb.text(`↪️ Перенести невиконане (${m})`, 'pln:carry:open').row();
   kb.text('➕ Додати нове', 'pln:plan:add');
-  const text = `🗓 Час планувати наступний тиждень!\n${seeded ? `🔁 ${seeded} щотижневих справ уже додано.\n` : ''}${m ? `↪️ Є ${m} невиконаних — перенести?` : 'Цей тиждень закрито 👏'}`;
+  const text = `🗓 Час планувати наступний тиждень!\n${seeded ? `🔁 Додано ${seeded} ${plural(seeded, 'щотижневу справу', 'щотижневі справи', 'щотижневих справ')}.\n` : ''}${m ? `↪️ Є ${m} ${plural(m, 'невиконаний пункт', 'невиконані пункти', 'невиконаних пунктів')} — перенести?` : 'Цей тиждень закрито 👏'}`;
   await bot.api.sendMessage(chatId, text, { reply_markup: kb });
 }
 

@@ -6,7 +6,7 @@ import {
 import { createReminder, getReminders, isRemindersConnected } from '../services/reminders/index.js';
 import { createTask } from '../services/notion/index.js';
 import db from '../db/index.js';
-import { addPlanItem, addRecurring, dayKeyFromText, findItemByTitle, makeRecurring, togglePlanItem } from '../services/plan/index.js';
+import { addPlanItem, addRecurring, dayKeyFromText, findItemByTitle, makeRecurring, plural, togglePlanItem } from '../services/plan/index.js';
 
 // ─── Результат виклику інструмента ──────────────────────────────
 // observation — дані назад моделі (read), цикл триває
@@ -35,14 +35,6 @@ function fmtKyiv(iso: string): string {
 function sameKyivDay(iso: string, ref: Date): boolean {
   const opt = { timeZone: 'Europe/Kyiv' } as const;
   return new Date(iso).toLocaleDateString('uk-UA', opt) === ref.toLocaleDateString('uk-UA', opt);
-}
-
-// Українське відмінювання за числом: 1→one, 2-4→few, 5+→many (з урахуванням 11-14)
-function plural(n: number, one: string, few: string, many: string): string {
-  const m10 = n % 10, m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return one;
-  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
-  return many;
 }
 
 // ─── Єдиний creator: kind → виклик API (спільний для create-тулів і чеклиста) ──
