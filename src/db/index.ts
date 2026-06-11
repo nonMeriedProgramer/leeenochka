@@ -79,6 +79,15 @@ export async function initDb(): Promise<void> {
       pct        INTEGER NOT NULL,
       closed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- Закриваємо таблиці від публічного REST API Supabase (anon-ключ).
+    -- Бот — власник таблиць (роль postgres) — RLS обходить, тож працює як і раніше.
+    ALTER TABLE memories       ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE messages       ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE reminders      ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE plan_items     ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE plan_recurring ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE plan_weeks     ENABLE ROW LEVEL SECURITY;
   `);
   console.log('✅ DB ready (Postgres)');
 }
