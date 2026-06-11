@@ -20,16 +20,15 @@ const FALLBACK_MODEL = 'gpt-5.5';
 const fmtDate = (d: Date) => d.toLocaleDateString('uk-UA', { timeZone: 'Europe/Kyiv', dateStyle: 'long' });
 
 // Пригадує збережені вподобання/факти, щоб модель їх враховувала
-function recallMemories(): string {
+async function recallMemories(): Promise<string> {
   try {
-    const rows = db.prepare('SELECT content FROM memories ORDER BY id DESC LIMIT 15')
-      .all() as Array<{ content: string }>;
+    const rows = await db.query<{ content: string }>('SELECT content FROM memories ORDER BY id DESC LIMIT 15');
     if (!rows.length) return '';
     return `\n\nЩО ПАМʼЯТАЮ ПРО КОРИСТУВАЧА (враховуй у відповідях, створенні та пропозиціях):\n${rows.map(r => `- ${r.content}`).join('\n')}`;
   } catch { return ''; }
 }
 
-function systemPrompt(): string {
+async function systemPrompt(): Promise<string> {
   const today = fmtDate(new Date());
   const tomorrow = fmtDate(new Date(Date.now() + 86400000));
   return `Ти — Leeenochka, особистий AI-асистент. Відповідаєш українською, коротко й по суті — без вступів, вибачень і "звичайно!".
@@ -60,19 +59,22 @@ function systemPrompt(): string {
 - Бракує даних для створення — коротко перепитай.
 
 Усі datetime — у форматі 2026-06-04T19:00:00+03:00 (Київ, UTC+3).
-Сьогодні: ${today}. Завтра: ${tomorrow}.${recallMemories()}`;
+Сьогодні: ${today}. Завтра: ${tomorrow}.${await recallMemories()}`;
 }
 
 // Повертає провайдера для агента: Groq якщо є ключ, інакше FreeModel
-export function chatProvider(): { client: OpenAI; model: string; system: string } {
+export async function chatProvider(): Promise<{ client: OpenAI; model: string; system: string }> {
+  const system = await systemPrompt();
   return process.env.GROQ_API_KEY
-    ? { client: groq(), model: CHAT_MODEL, system: systemPrompt() }
-    : { client: freemodel(), model: FALLBACK_MODEL, system: systemPrompt() };
+    ? { client: groq(), model: CHAT_MODEL, system }
+    : { client: freemodel(), model: FALLBACK_MODEL, system };
 }
 
+// fire-and-forget: лог повідомлення не має блокувати відповідь
 export function saveMessage(role: 'user' | 'assistant', content: string) {
-  db.prepare('INSERT INTO messages (role, content) VALUES (?, ?)').run(role, content);
-  db.prepare('DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 100)').run();
+  db.run('INSERT INTO messages (role, content) VALUES ($1, $2)', [role, content])
+    .then(() => db.run('DELETE FROM messages WHERE id NOT IN (SELECT id FROM messages ORDER BY id DESC LIMIT 100)'))
+    .catch(e => console.error('saveMessage failed:', e instanceof Error ? e.message : e));
 }
 
 export function formatConfirmation(intent: ParsedIntent): string {

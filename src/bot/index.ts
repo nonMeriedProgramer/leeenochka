@@ -77,8 +77,8 @@ function itemRows(kb: InlineKeyboard, items: PlanItem[], ctx: string, groupByCat
   }
 }
 
-function viewDay(day: Day): { text: string; kb: InlineKeyboard } {
-  const all = getWeekItems();
+async function viewDay(day: Day): Promise<{ text: string; kb: InlineKeyboard }> {
+  const all = await getWeekItems();
   const dayItems = all.filter(i => i.day === day);
   const floatN = all.filter(i => i.day === null).length;
   const kb = new InlineKeyboard();
@@ -86,7 +86,7 @@ function viewDay(day: Day): { text: string; kb: InlineKeyboard } {
   DAY_ORDER.forEach(d => kb.text(d === day ? `·${dayUk(d)}·` : dayUk(d), `pln:v:d:${d}`));
   kb.row();
   kb.text('🗂 По категоріях', 'pln:axis:c').text('📊', 'pln:score');
-  const s = weekScore();
+  const s = weekScore(all);
   let text = `📅 ${dayLabel(day)}`;
   if (!dayItems.length) text += '\n(на цей день нічого не заплановано)';
   if (floatN) text += `\n🗒 +${floatN} без дня — у «По категоріях»`;
@@ -94,9 +94,10 @@ function viewDay(day: Day): { text: string; kb: InlineKeyboard } {
   return { text, kb };
 }
 
-function viewCategoryPicker(): { text: string; kb: InlineKeyboard } {
-  const cats = categoriesOf();
-  const s = weekScore();
+async function viewCategoryPicker(): Promise<{ text: string; kb: InlineKeyboard }> {
+  const all = await getWeekItems();
+  const cats = categoriesOf(all);
+  const s = weekScore(all);
   const kb = new InlineKeyboard();
   if (!cats.length) { kb.text('📅 По днях', 'pln:axis:d'); return { text: 'План порожній. Встав список — заповню.', kb }; }
   cats.forEach((c, i) => {
@@ -107,23 +108,25 @@ function viewCategoryPicker(): { text: string; kb: InlineKeyboard } {
   return { text: '🗂 План на тиждень — обери категорію:', kb };
 }
 
-function viewCategory(idx: number): { text: string; kb: InlineKeyboard } {
-  const cats = categoriesOf();
+async function viewCategory(idx: number): Promise<{ text: string; kb: InlineKeyboard }> {
+  const all = await getWeekItems();
+  const cats = categoriesOf(all);
   const c = cats[idx];
   if (!c) return viewCategoryPicker();
-  const items = getWeekItems().filter(i => i.category === c);
+  const items = all.filter(i => i.category === c);
   const kb = new InlineKeyboard();
   itemRows(kb, items, `c:${idx}`, false);
   kb.text('‹ Категорії', 'pln:axis:c').text('📊', 'pln:score');
-  const cs = weekScore().perCategory[c] ?? { done: 0, total: 0, pct: 0 };
+  const cs = weekScore(all).perCategory[c] ?? { done: 0, total: 0, pct: 0 };
   return { text: `${catIcon(c)} ${c} — ${cs.done}/${cs.total} ${bar(cs.pct)} ${cs.pct}%`, kb };
 }
 
-function viewScore(): string {
-  const s = weekScore();
-  const t = trendAndStreak();
+async function viewScore(): Promise<string> {
+  const all = await getWeekItems();
+  const s = weekScore(all);
+  const t = await trendAndStreak();
   const lines = [`📊 Тиждень — ${s.done}/${s.total} ${bar(s.pct)} ${s.pct}%${t.lastPct != null ? ` (минулий ${t.lastPct}% ${t.arrow})` : ''}`];
-  for (const c of categoriesOf()) {
+  for (const c of categoriesOf(all)) {
     const cs = s.perCategory[c];
     if (cs) lines.push(`${catIcon(c)} ${c} ${cs.done}/${cs.total} ${bar(cs.pct)} ${cs.pct}%`);
   }
@@ -143,19 +146,19 @@ function carryKeyboard(): InlineKeyboard {
 
 // ─── Проактивні відправки плану (для планувальника) ─────────────
 export async function sendPlanBoard(bot: Bot, chatId: number, silent = false): Promise<void> {
-  ensureWeekSeeded();
-  if (!getWeekItems().length) return; // порожній план — не спамимо
-  const { text, kb } = viewDay(todayDayKey());
+  await ensureWeekSeeded();
+  if (!(await getWeekItems()).length) return; // порожній план — не спамимо
+  const { text, kb } = await viewDay(todayDayKey());
   await bot.api.sendMessage(chatId, text, { reply_markup: kb, disable_notification: silent });
 }
 export async function sendWeeklyReport(bot: Bot, chatId: number): Promise<void> {
-  if (!getWeekItems().length) return;
+  if (!(await getWeekItems()).length) return;
   const kb = new InlineKeyboard().text('📅 До плану', `pln:v:d:${todayDayKey()}`);
-  await bot.api.sendMessage(chatId, viewScore(), { reply_markup: kb });
+  await bot.api.sendMessage(chatId, await viewScore(), { reply_markup: kb });
 }
 export async function sendPlanPrompt(bot: Bot, chatId: number): Promise<void> {
-  const seeded = ensureWeekSeeded(nextWeekStart());
-  const m = carryables(kyivWeekStart()).length;
+  const seeded = await ensureWeekSeeded(nextWeekStart());
+  const m = (await carryables(kyivWeekStart())).length;
   const kb = new InlineKeyboard();
   if (m) kb.text(`↪️ Перенести невиконане (${m})`, 'pln:carry:open').row();
   kb.text('➕ Додати нове', 'pln:plan:add');
@@ -171,19 +174,19 @@ async function handlePlanCallback(ctx: any, data: string): Promise<void> {
     ctx.editMessageText(v.text, { reply_markup: v.kb }).catch(() => {});
 
   if (action === 'noop') return;
-  if (action === 'v' && p[2] === 'd') { await reRender(viewDay(p[3] as Day)); return; }
-  if (action === 'v' && p[2] === 'c') { await reRender(viewCategory(Number(p[3]))); return; }
-  if (action === 'axis' && p[2] === 'c') { await reRender(viewCategoryPicker()); return; }
-  if (action === 'axis' && p[2] === 'd') { await reRender(viewDay(todayDayKey())); return; }
+  if (action === 'v' && p[2] === 'd') { await reRender(await viewDay(p[3] as Day)); return; }
+  if (action === 'v' && p[2] === 'c') { await reRender(await viewCategory(Number(p[3]))); return; }
+  if (action === 'axis' && p[2] === 'c') { await reRender(await viewCategoryPicker()); return; }
+  if (action === 'axis' && p[2] === 'd') { await reRender(await viewDay(todayDayKey())); return; }
   if (action === 'score') {
     const kb = new InlineKeyboard().text('📅 До плану', `pln:v:d:${todayDayKey()}`);
-    await ctx.editMessageText(viewScore(), { reply_markup: kb }).catch(() => {});
+    await ctx.editMessageText(await viewScore(), { reply_markup: kb }).catch(() => {});
     return;
   }
   if (action === 'tog') {
-    togglePlanItem(Number(p[2]));
-    if (p[3] === 'd') await reRender(viewDay(p[4] as Day));
-    else if (p[3] === 'c') await reRender(viewCategory(Number(p[4])));
+    await togglePlanItem(Number(p[2]));
+    if (p[3] === 'd') await reRender(await viewDay(p[4] as Day));
+    else if (p[3] === 'c') await reRender(await viewCategory(Number(p[4])));
     return;
   }
   if (action === 'plan' && p[2] === 'add') {
@@ -196,7 +199,7 @@ async function handlePlanCallback(ctx: any, data: string): Promise<void> {
 async function handleCarryCallback(ctx: any, p: string[]): Promise<void> {
   const sub = p[2];
   if (sub === 'open') {
-    const items = carryables(kyivWeekStart()).map(i => ({ id: i.id, label: `${catIcon(i.category)} ${i.title}` }));
+    const items = (await carryables(kyivWeekStart())).map(i => ({ id: i.id, label: `${catIcon(i.category)} ${i.title}` }));
     if (!items.length) { await ctx.editMessageText('Невиконаного нема — все закрито 👏').catch(() => {}); return; }
     pendingCarry = { items, selected: items.map(() => false), toWs: nextWeekStart() };
     await ctx.editMessageText('Познач, що перенести на наступний тиждень:', { reply_markup: carryKeyboard() }).catch(() => {});
@@ -214,7 +217,7 @@ async function handleCarryCallback(ctx: any, p: string[]): Promise<void> {
   if (sub === 'go') {
     const ids = pendingCarry.items.filter((_, i) => pendingCarry!.selected[i]).map(it => it.id);
     const toWs = pendingCarry.toWs; pendingCarry = null;
-    const n = carryItems(ids, toWs);
+    const n = await carryItems(ids, toWs);
     await ctx.editMessageText(n ? `↪️ Перенесено ${n} на наступний тиждень.` : 'Нічого не обрано.').catch(() => {});
     return;
   }
@@ -313,7 +316,7 @@ export function createBot(token: string) {
 
   // ─── /memory ──────────────────────────────────────────────────
   bot.command('memory', async (ctx) => {
-    const rows = db.prepare('SELECT kind, content FROM memories ORDER BY id DESC LIMIT 20').all() as Array<{ kind: string; content: string }>;
+    const rows = await db.query<{ kind: string; content: string }>('SELECT kind, content FROM memories ORDER BY id DESC LIMIT 20');
     if (!rows.length) { await ctx.reply('Пам\'ять порожня.'); return; }
     const text = rows.map(r => `• [${r.kind}] ${r.content}`).join('\n');
     await ctx.reply(`🧠 *Що я про тебе знаю:*\n${text}`, { parse_mode: 'Markdown' });
@@ -321,15 +324,15 @@ export function createBot(token: string) {
 
   // ─── /plan ────────────────────────────────────────────────────
   bot.command('plan', async (ctx) => {
-    ensureWeekSeeded();
-    const { text, kb } = viewDay(todayDayKey());
+    await ensureWeekSeeded();
+    const { text, kb } = await viewDay(todayDayKey());
     await ctx.reply(text, { reply_markup: kb });
   });
 
   // ─── /progress ────────────────────────────────────────────────
   bot.command('progress', async (ctx) => {
     const kb = new InlineKeyboard().text('📅 До плану', `pln:v:d:${todayDayKey()}`);
-    await ctx.reply(viewScore(), { reply_markup: kb });
+    await ctx.reply(await viewScore(), { reply_markup: kb });
   });
 
   // ─── Inline-кнопки ────────────────────────────────────────────

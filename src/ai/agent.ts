@@ -36,9 +36,8 @@ function toResult(outcomes: ToolOutcome[]): AgentResult {
 
 // Головний цикл: модель сама вирішує які інструменти викликати.
 export async function runAgent(userMessage: string): Promise<AgentResult> {
-  const { client, model, system } = chatProvider();
-  const history = (db.prepare('SELECT role, content FROM messages ORDER BY id DESC LIMIT 20')
-    .all() as Array<{ role: string; content: string }>).reverse();
+  const { client, model, system } = await chatProvider();
+  const history = (await db.query<{ role: string; content: string }>('SELECT role, content FROM messages ORDER BY id DESC LIMIT 20')).reverse();
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: 'system', content: system },
@@ -86,7 +85,7 @@ export async function runAgent(userMessage: string): Promise<AgentResult> {
 
 // Генерує ідеї (форсує propose_items) — для ранкового брифа/проактивних пропозицій
 export async function generateIdeas(context: string): Promise<Array<{ label: string; create: () => Promise<string> }>> {
-  const { client, model, system } = chatProvider();
+  const { client, model, system } = await chatProvider();
   try {
     const res = await client.chat.completions.create({
       model,

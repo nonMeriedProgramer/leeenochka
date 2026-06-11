@@ -1,6 +1,7 @@
 import { createBot } from './bot/index.js';
 import { startServer } from './auth/oauth-server.js';
 import { startScheduler } from './services/scheduler/index.js';
+import { initDb } from './db/index.js';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN is required');
@@ -14,6 +15,7 @@ const appUrl = process.env.RENDER_EXTERNAL_URL ?? process.env.APP_URL;
 
 async function main() {
   await bot.init();
+  await initDb();
   startScheduler(bot);
 
   if (appUrl) {

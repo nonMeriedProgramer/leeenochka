@@ -66,7 +66,7 @@ async function createItem(item: Item): Promise<{ message: string; undo?: () => P
         priority: item.priority, description: item.description,
       });
       // Якщо є дедлайн — плануємо пінг у Telegram (інакше задача нікого не нагадає)
-      if (deadline) db.prepare('INSERT INTO reminders (fire_at, text) VALUES (?, ?)').run(deadline, item.title);
+      if (deadline) await db.run('INSERT INTO reminders (fire_at, text) VALUES ($1, $2)', [deadline, item.title]);
       return { message: deadline ? `✅ Задача: «${item.title}» — нагадаю ${fmtKyiv(deadline)}` : `✅ Задача: «${item.title}»` };
     }
     case 'note': {
@@ -75,8 +75,8 @@ async function createItem(item: Item): Promise<{ message: string; undo?: () => P
     }
     case 'reminder': {
       const due = ensureKyivTz(String(item.datetime ?? ''));
-      // Завжди в SQLite — щоб планувальник пінгнув у Telegram у потрібний час
-      db.prepare('INSERT INTO reminders (fire_at, text) VALUES (?, ?)').run(due, item.title);
+      // Завжди в нашу БД — щоб планувальник пінгнув у Telegram у потрібний час
+      await db.run('INSERT INTO reminders (fire_at, text) VALUES ($1, $2)', [due, item.title]);
       // Додатково дзеркалимо в Apple Reminders, якщо підключено
       if (isRemindersConnected()) { try { await createReminder({ title: item.title, due }); } catch { /* не критично */ } }
       return { message: `⏰ Нагадаю: «${item.title}» — ${fmtKyiv(due)}` };
@@ -138,7 +138,7 @@ const HANDLERS: Record<string, Handler> = {
     const kind = allowed.includes(args.kind) ? args.kind : 'preference';
     const fact = String(args.fact ?? '').trim();
     if (!fact) return { kind: 'observation', data: 'Нема що запамʼятовувати.' };
-    db.prepare("INSERT INTO memories (kind, content, source) VALUES (?, ?, 'told')").run(kind, fact);
+    await db.run("INSERT INTO memories (kind, content, source) VALUES ($1, $2, 'told')", [kind, fact]);
     return { kind: 'done', message: `🧠 Запамʼятала: ${fact}` };
   },
 
@@ -211,8 +211,8 @@ const HANDLERS: Record<string, Handler> = {
       const category = String(it.category ?? '').trim() || 'Інше';
       const day = dayKeyFromText(it.day);
       const rec = it.recurring ? 1 : 0;
-      addPlanItem({ category, title, day, recurring: rec });
-      if (rec) addRecurring({ category, title, day });
+      await addPlanItem({ category, title, day, recurring: rec });
+      if (rec) await addRecurring({ category, title, day });
       cats.add(category); n++;
     }
     return { kind: 'done', message: `🗂 Залито ${n} ${plural(n, 'пункт', 'пункти', 'пунктів')} у ${cats.size} ${plural(cats.size, 'категорію', 'категорії', 'категорій')}. Відкрий /plan` };
@@ -224,23 +224,23 @@ const HANDLERS: Record<string, Handler> = {
     const category = String(args.category ?? '').trim() || 'Інше';
     const day = dayKeyFromText(args.day);
     const rec = args.recurring ? 1 : 0;
-    addPlanItem({ category, title, day, recurring: rec });
-    if (rec) addRecurring({ category, title, day });
+    await addPlanItem({ category, title, day, recurring: rec });
+    if (rec) await addRecurring({ category, title, day });
     return { kind: 'done', message: `➕ У план: «${title}» (${category}${rec ? ', 🔁 щотижня' : ''}). /plan` };
   },
 
   async plan_repeat(args) {
-    const item = findItemByTitle(String(args.title_query ?? ''));
+    const item = await findItemByTitle(String(args.title_query ?? ''));
     if (!item) return { kind: 'done', message: `Не знайшов у плані «${args.title_query}».` };
-    makeRecurring(item.id);
+    await makeRecurring(item.id);
     return { kind: 'done', message: `🔁 «${item.title}» тепер щотижнева.` };
   },
 
   async plan_done(args) {
-    const item = findItemByTitle(String(args.title_query ?? ''));
+    const item = await findItemByTitle(String(args.title_query ?? ''));
     if (!item) return { kind: 'done', message: `Не знайшов у плані «${args.title_query}».` };
     if (item.done) return { kind: 'done', message: `«${item.title}» вже виконано.` };
-    togglePlanItem(item.id);
+    await togglePlanItem(item.id);
     return { kind: 'done', message: `✅ Виконано: «${item.title}»` };
   },
 };

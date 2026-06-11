@@ -30,15 +30,14 @@ function timeKyiv(iso: string): string {
 async function fireDueReminders(bot: Bot) {
   const owner = ownerId();
   if (!owner) return;
-  const rows = db.prepare("SELECT id, fire_at, text FROM reminders WHERE status = 'scheduled'")
-    .all() as Array<{ id: number; fire_at: string; text: string }>;
+  const rows = await db.query<{ id: number; fire_at: string; text: string }>("SELECT id, fire_at, text FROM reminders WHERE status = 'scheduled'");
   const now = Date.now();
   for (const r of rows) {
     const t = new Date(r.fire_at).getTime();
     if (!Number.isFinite(t) || t > now) continue;
     try {
       await bot.api.sendMessage(owner, `⏰ Нагадування: ${r.text}`);
-      db.prepare("UPDATE reminders SET status = 'sent' WHERE id = ?").run(r.id);
+      await db.run("UPDATE reminders SET status = 'sent' WHERE id = $1", [r.id]);
     } catch { /* спробуємо наступного тіку */ }
   }
 }
@@ -138,15 +137,15 @@ async function maybePlanPrompt(bot: Bot) {
 }
 
 // Ролл тижня — ідемпотентно щотіку: зафіксувати минулі тижні (знімок) + засіяти повтори
-function rollWeek() {
+async function rollWeek() {
   const ws = kyivWeekStart();
-  closePastWeeks(ws);
-  ensureWeekSeeded(ws);
+  await closePastWeeks(ws);
+  await ensureWeekSeeded(ws);
 }
 
 export function startScheduler(bot: Bot) {
   const tick = async () => {
-    try { rollWeek(); } catch { /* ignore */ }
+    try { await rollWeek(); } catch { /* ignore */ }
     try { await fireDueReminders(bot); } catch { /* ignore */ }
     try { await fireCalendarReminders(bot); } catch { /* ignore */ }
     try { await maybeMorningBrief(bot); } catch { /* ignore */ }
