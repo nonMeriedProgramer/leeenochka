@@ -58,7 +58,7 @@ async function systemPrompt(): Promise<string> {
 - title_query для reschedule/cancel — ТІЛЬКИ з поточного повідомлення.
 - Бракує даних для створення — коротко перепитай.
 
-Усі datetime — у форматі 2026-06-04T19:00:00+03:00 (Київ, UTC+3).
+Усі datetime пиши як ЛОКАЛЬНИЙ київський час БЕЗ зони, напр. 2026-06-04T19:00:00 (зону додам сам).
 Сьогодні: ${today}. Завтра: ${tomorrow}.${await recallMemories()}`;
 }
 

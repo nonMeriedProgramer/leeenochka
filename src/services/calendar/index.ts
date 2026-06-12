@@ -2,6 +2,7 @@ import https from 'node:https';
 import { setDefaultResultOrder } from 'node:dns';
 import { v4 as uuid } from 'uuid';
 import { getAppleCredentials } from '../../auth/tokens.js';
+import { kyivOffset } from '../../utils/kyiv.js';
 
 // Форсуємо IPv4 (Windows IPv6 може ламати TLS до iCloud shard-серверів)
 setDefaultResultOrder('ipv4first');
@@ -232,7 +233,9 @@ function parseICalDate(raw: string): string {
   if (s.length === 8) return `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`;
   const date = `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`;
   const time = `${s.slice(9,11)}:${s.slice(11,13)}:${s.slice(13,15)}`;
-  return s.endsWith('Z') ? `${date}T${time}Z` : `${date}T${time}`;
+  if (s.endsWith('Z')) return `${date}T${time}Z`;
+  const local = `${date}T${time}`;
+  return local + kyivOffset(new Date(local + 'Z')); // TZID/плаваючий час Apple → київський локальний
 }
 
 // Події у вікні `days` разом із href кожного ресурсу (потрібен для видалення/переносу)

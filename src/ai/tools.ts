@@ -7,6 +7,7 @@ import { createReminder, getReminders, isRemindersConnected } from '../services/
 import { createTask } from '../services/notion/index.js';
 import db from '../db/index.js';
 import { addPlanItem, addRecurring, dayKeyFromText, findItemByTitle, makeRecurring, plural, togglePlanItem } from '../services/plan/index.js';
+import { kyivOffset } from '../utils/kyiv.js';
 
 // ─── Результат виклику інструмента ──────────────────────────────
 // observation — дані назад моделі (read), цикл триває
@@ -23,7 +24,10 @@ export type ToolOutcome =
 // ─── Хелпери таймзони/форматування ──────────────────────────────
 export function ensureKyivTz(dt: string): string {
   if (!dt) return dt;
-  return /Z$|[+-]\d{2}:?\d{2}$/.test(dt) ? dt : dt + '+03:00';
+  if (/Z$|[+-]\d{2}:?\d{2}$/.test(dt)) return dt; // вже з зоною — лишаємо
+  // наївний київський час → додаємо актуальний offset для цієї дати (літо +03, зима +02)
+  const at = new Date(dt + 'Z');
+  return dt + kyivOffset(Number.isNaN(at.getTime()) ? new Date() : at);
 }
 
 function fmtKyiv(iso: string): string {
@@ -257,7 +261,7 @@ export async function dispatch(name: string, args: Record<string, any>): Promise
 }
 
 // ─── Декларативні схеми для моделі ──────────────────────────────
-const DT = 'ISO-8601 з таймзоною Києва, напр. 2026-06-04T19:00:00+03:00';
+const DT = 'локальний київський час БЕЗ зони, напр. 2026-06-04T19:00:00';
 
 export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
