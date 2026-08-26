@@ -1,9 +1,10 @@
 import type { Bot } from 'grammy';
 import db from '../../db/index.js';
-import { presentChecklist, sendPlanBoard, sendWeeklyReport, sendPlanPrompt } from '../../bot/index.js';
+import { presentChecklist, sendPlanBoard, sendWeeklyReport, sendPlanPrompt, sendGymPicker } from '../../bot/index.js';
 import { generateIdeas } from '../../ai/agent.js';
 import { isCalendarConnected, getUpcomingEvents } from '../calendar/index.js';
-import { kyivWeekStart, closePastWeeks, ensureWeekSeeded } from '../plan/index.js';
+import { kyivWeekStart, nextWeekStart, closePastWeeks, ensureWeekSeeded } from '../plan/index.js';
+import { pendingGarminActivities, markGarminProcessed, proposalsFromActivity } from '../training/garmin.js';
 
 const TICK_MS = 30_000; // перевірка кожні 30с
 
@@ -134,6 +135,25 @@ async function maybePlanPrompt(bot: Bot) {
   if (weekday !== 'Sun' || hour !== 20 || minute > 5 || lastPlanPromptDate === date) return;
   lastPlanPromptDate = date;
   try { await sendPlanPrompt(bot, owner); } catch { /* ignore */ }
+  // Одразу після тижневого плану — вибір днів залу на наступний тиждень
+  try { await sendGymPicker(bot, owner, nextWeekStart()); } catch { /* ignore */ }
+}
+
+// ─── Нові Garmin-сети (силові) — пропонуємо чеклистом на підтвердження ──
+// tools/garmin_sync.py пише в garmin_activities незалежно від того, чи бот
+// запущений; цей тік просто підбирає те, що ще не оброблено.
+async function maybeProposeGarminSets(bot: Bot) {
+  const owner = ownerId();
+  if (!owner) return;
+  const rows = await pendingGarminActivities();
+  for (const row of rows) {
+    const items = proposalsFromActivity(row);
+    await markGarminProcessed(row.garmin_id); // пропонуємо один раз — не спамимо повторно
+    if (!items.length) continue;
+    try {
+      await presentChecklist(bot, owner, `⌚ З Garmin (${row.activity_date ?? ''}) — що записати в тренування?`, items);
+    } catch { /* ignore */ }
+  }
 }
 
 // Ролл тижня — ідемпотентно щотіку: зафіксувати минулі тижні (знімок) + засіяти повтори
@@ -152,6 +172,7 @@ export function startScheduler(bot: Bot) {
     try { await maybePlanBoard(bot); } catch { /* ignore */ }
     try { await maybeWeeklyReport(bot); } catch { /* ignore */ }
     try { await maybePlanPrompt(bot); } catch { /* ignore */ }
+    try { await maybeProposeGarminSets(bot); } catch { /* ignore */ }
   };
   setInterval(tick, TICK_MS);
   console.log('⏰ Scheduler started (reminders + calendar + brief + plan)');

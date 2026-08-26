@@ -11,14 +11,19 @@ import db from '../db/index.js';
 import {
   type Day, type PlanItem, DAY_ORDER, dayUk, todayDayKey, kyivWeekStart, nextWeekStart,
   getWeekItems, togglePlanItem, categoriesOf, weekScore, trendAndStreak,
-  carryables, carryItems, ensureWeekSeeded, PLAN_GOAL_PCT, bar, plural,
+  carryables, carryItems, ensureWeekSeeded, PLAN_GOAL_PCT, bar, plural, addPlanItem,
 } from '../services/plan/index.js';
+import {
+  DAYS as GYM_DAYS, gymScheduleFor, setGymSchedule, lastWeekGymDays,
+  dayIndexInSchedule, resolveDay, renderSession, cycleStart, startCycle,
+} from '../services/training/index.js';
 
 // Очікувані дії (бот однокористувацький — owner-only, module-level стан ок)
 let pendingAction: { execute: () => Promise<string> } | null = null;     // ✅/❌ підтвердження
 let pendingOptions: Array<{ label: string; execute: () => Promise<string> }> | null = null; // вибір зі списку
 let pendingChecklist: { items: Array<{ label: string; create: () => Promise<string> }>; selected: boolean[] } | null = null;
 let pendingCarry: { items: Array<{ id: number; label: string }>; selected: boolean[]; toWs: string } | null = null; // ↪️ перенос пунктів плану
+let pendingGymPick: { selected: boolean[]; ws: string } | null = null; // 🏋️ вибір днів залу на тиждень
 
 // Кожне створення реєструє свій undo під унікальним id → кнопка «Скасувати» відміняє саме свою подію, а не останню
 const pendingUndos = new Map<string, () => Promise<string>>();
@@ -30,7 +35,7 @@ function addUndo(fn: () => Promise<string>): string {
   return id;
 }
 
-function clearPending() { pendingAction = null; pendingOptions = null; pendingChecklist = null; pendingCarry = null; }
+function clearPending() { pendingAction = null; pendingOptions = null; pendingChecklist = null; pendingCarry = null; pendingGymPick = null; }
 
 // Клавіатура чеклиста: ☐/☑ на кожен пункт + "➕ Додати"
 function checklistKeyboard(cl: NonNullable<typeof pendingChecklist>): InlineKeyboard {
@@ -91,6 +96,16 @@ async function viewDay(day: Day): Promise<{ text: string; kb: InlineKeyboard }> 
   if (!dayItems.length) text += '\n(на цей день нічого не заплановано)';
   if (floatN) text += `\n🗒 +${floatN} без дня — у «По категоріях»`;
   text += `\nТиждень: ${s.done}/${s.total} ${bar(s.pct)} ${s.pct}%`;
+
+  // Якщо на цей день випадає зал — виводимо повну сесію для наглядності
+  const gymSchedule = await gymScheduleFor();
+  const idx = dayIndexInSchedule(gymSchedule, day);
+  if (idx !== null) {
+    try {
+      const session = await resolveDay(GYM_DAYS[idx]);
+      text += `\n\n${renderSession(session)}`;
+    } catch { /* ignore — дошка лишається без сесії */ }
+  }
   return { text, kb };
 }
 
@@ -142,6 +157,74 @@ function carryKeyboard(): InlineKeyboard {
   const n = cl.selected.filter(Boolean).length;
   kb.text(n ? `↪️ Перенести (${n})` : '↪️ Перенести', 'pln:carry:go').text('❌', 'confirm_no');
   return kb;
+}
+
+// ─── Вибір днів залу на тиждень (щонеділі) ───────────────────────
+const DAY_SHORT: Record<Day, string> = { mon: 'Пн', tue: 'Вт', wed: 'Ср', thu: 'Чт', fri: 'Пт', sat: 'Сб', sun: 'Нд' };
+
+function gymPickKeyboard(lastWeek: Day[]): InlineKeyboard {
+  const p = pendingGymPick!;
+  const kb = new InlineKeyboard();
+  DAY_ORDER.forEach((d, i) => {
+    kb.text(`${p.selected[i] ? '☑' : '☐'} ${DAY_SHORT[d]}`, `gym:t:${i}`);
+    if (i === 3) kb.row(); // 2 рядки по 4/3
+  });
+  kb.row();
+  if (lastWeek.length) {
+    kb.text(`🔁 Як минулого тижня (${lastWeek.map((d) => DAY_SHORT[d]).join(', ')})`, 'gym:last').row();
+  }
+  const n = p.selected.filter(Boolean).length;
+  kb.text(n ? `✅ Зберегти (${n})` : '✅ Зберегти', 'gym:save').text('❌', 'confirm_no');
+  return kb;
+}
+
+export async function sendGymPicker(bot: Bot, chatId: number, ws = kyivWeekStart()): Promise<void> {
+  clearPending();
+  const lastWeek = await lastWeekGymDays(ws);
+  pendingGymPick = { selected: DAY_ORDER.map(() => false), ws };
+  await bot.api.sendMessage(chatId, '🏋️ Які дні залу цього тижня? Познач до 3 днів.', {
+    reply_markup: gymPickKeyboard(lastWeek),
+  });
+}
+
+async function handleGymCallback(ctx: any, p: string[]): Promise<void> {
+  const sub = p[1];
+  if (sub === 't') {
+    if (!pendingGymPick) return;
+    const i = Number(p[2]);
+    if (i >= 0 && i < pendingGymPick.selected.length) pendingGymPick.selected[i] = !pendingGymPick.selected[i];
+    const lastWeek = await lastWeekGymDays(pendingGymPick.ws);
+    await ctx.editMessageReplyMarkup({ reply_markup: gymPickKeyboard(lastWeek) }).catch(() => {});
+    return;
+  }
+  if (sub === 'last') {
+    if (!pendingGymPick) return;
+    const lastWeek = await lastWeekGymDays(pendingGymPick.ws);
+    pendingGymPick.selected = DAY_ORDER.map((d) => lastWeek.includes(d));
+    await ctx.editMessageReplyMarkup({ reply_markup: gymPickKeyboard(lastWeek) }).catch(() => {});
+    return;
+  }
+  if (sub === 'save') {
+    if (!pendingGymPick) return;
+    const days = DAY_ORDER.filter((_, i) => pendingGymPick!.selected[i]);
+    const ws = pendingGymPick.ws;
+    pendingGymPick = null;
+    if (!days.length) { await ctx.editMessageText('Не обрано жодного дня — розклад не збережено.').catch(() => {}); return; }
+    await setGymSchedule(days, ws);
+    // Перший обраний тиждень запускає відлік 16-тижневого циклу (для % РВ6 і роадмапи)
+    const startedFresh = !(await cycleStart());
+    if (startedFresh) await startCycle(ws);
+
+    // Мітка в категорії «Спорт»: 3 пункти-згадки на обрані дні (перезаливаємо, якщо вже були цього тижня)
+    await db.run("DELETE FROM plan_items WHERE week_start = $1 AND category = 'Спорт' AND title LIKE '🏋️ Зал:%'", [ws]);
+    for (let i = 0; i < Math.min(3, days.length); i++) {
+      await addPlanItem({ week_start: ws, category: 'Спорт', title: `🏋️ Зал: ${GYM_DAYS[i].title}`, day: days[i], recurring: 0 });
+    }
+
+    const startNote = startedFresh ? '\n\n🚀 Це перший тиждень циклу — 16-тижневий відлік розпочато.' : '';
+    await ctx.editMessageText(`🏋️ Дні залу на тиждень: ${days.map((d) => DAY_SHORT[d]).join(', ')}. У ці дні тренування видно повністю в /plan.${startNote}`).catch(() => {});
+    return;
+  }
 }
 
 // ─── Проактивні відправки плану (для планувальника) ─────────────
@@ -329,6 +412,11 @@ export function createBot(token: string) {
     await ctx.reply(text, { reply_markup: kb });
   });
 
+  // ─── /gym — обрати дні залу на тиждень ───────────────────────
+  bot.command('gym', async (ctx) => {
+    await sendGymPicker(bot, ctx.chat.id);
+  });
+
   // ─── /progress ────────────────────────────────────────────────
   bot.command('progress', async (ctx) => {
     const kb = new InlineKeyboard().text('📅 До плану', `pln:v:d:${todayDayKey()}`);
@@ -341,6 +429,7 @@ export function createBot(token: string) {
     await ctx.answerCallbackQuery();
 
     if (data.startsWith('pln:')) { await handlePlanCallback(ctx, data); return; }
+    if (data.startsWith('gym:')) { await handleGymCallback(ctx, data.split(':')); return; }
 
     const run = async (fn: () => Promise<string>) => {
       await ctx.editMessageReplyMarkup(undefined).catch(() => {});

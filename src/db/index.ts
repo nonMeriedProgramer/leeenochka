@@ -80,14 +80,66 @@ export async function initDb(): Promise<void> {
       closed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- ── Тренування (силова програма) ─────────────────────────────
+    CREATE TABLE IF NOT EXISTS training_maxes (
+      exercise   TEXT PRIMARY KEY,
+      rv6        NUMERIC NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS training_state (
+      id         INTEGER PRIMARY KEY DEFAULT 1,
+      started_on DATE,
+      CONSTRAINT training_state_singleton CHECK (id = 1)
+    );
+
+    CREATE TABLE IF NOT EXISTS training_logs (
+      id                 INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      log_date           DATE NOT NULL,
+      week               INTEGER,
+      day_key            TEXT,
+      exercise           TEXT NOT NULL,
+      weight             NUMERIC,
+      reps_json          JSONB NOT NULL DEFAULT '[]'::jsonb,
+      rir                TEXT,
+      note               TEXT,
+      source             TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual','garmin')),
+      garmin_activity_id TEXT,
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_training_logs_date ON training_logs (log_date DESC);
+
+    -- Кеш підтягнутих із Garmin активностей; processed=false → бот ще не запитав підтвердження
+    CREATE TABLE IF NOT EXISTS garmin_activities (
+      garmin_id     TEXT PRIMARY KEY,
+      activity_date DATE,
+      type          TEXT,
+      name          TEXT,
+      raw           JSONB,
+      parsed        JSONB,
+      processed     BOOLEAN NOT NULL DEFAULT false,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Обрані дні залу на тиждень (для дошки/нагадувань і «як минулого тижня»)
+    CREATE TABLE IF NOT EXISTS gym_schedule (
+      week_start TEXT PRIMARY KEY,
+      days       JSONB NOT NULL DEFAULT '[]'::jsonb
+    );
+
     -- Закриваємо таблиці від публічного REST API Supabase (anon-ключ).
     -- Бот — власник таблиць (роль postgres) — RLS обходить, тож працює як і раніше.
-    ALTER TABLE memories       ENABLE ROW LEVEL SECURITY;
-    ALTER TABLE messages       ENABLE ROW LEVEL SECURITY;
-    ALTER TABLE reminders      ENABLE ROW LEVEL SECURITY;
-    ALTER TABLE plan_items     ENABLE ROW LEVEL SECURITY;
-    ALTER TABLE plan_recurring ENABLE ROW LEVEL SECURITY;
-    ALTER TABLE plan_weeks     ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE memories          ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE messages          ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE reminders         ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE plan_items        ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE plan_recurring    ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE plan_weeks        ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE training_maxes    ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE training_state    ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE training_logs     ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE garmin_activities ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE gym_schedule      ENABLE ROW LEVEL SECURITY;
   `);
   console.log('✅ DB ready (Postgres)');
 }

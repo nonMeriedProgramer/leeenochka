@@ -8,6 +8,12 @@ import { createTask } from '../services/notion/index.js';
 import db from '../db/index.js';
 import { addPlanItem, addRecurring, dayKeyFromText, findItemByTitle, makeRecurring, plural, togglePlanItem } from '../services/plan/index.js';
 import { kyivOffset } from '../utils/kyiv.js';
+import {
+  MAIN_EXERCISES, type MainKey,
+  getMaxes, setMax, todaySession, resolveDay, renderSession,
+  logWorkout, logsForExercise, DAYS, currentWeek,
+} from '../services/training/index.js';
+import { postWorkoutToChannel, type ChannelLogLine } from '../services/training/channel.js';
 
 // ─── Результат виклику інструмента ──────────────────────────────
 // observation — дані назад моделі (read), цикл триває
@@ -247,7 +253,87 @@ const HANDLERS: Record<string, Handler> = {
     await togglePlanItem(item.id);
     return { kind: 'done', message: `✅ Виконано: «${item.title}»` };
   },
+
+  // ─── Тренування (силова програма) ──────────────────────────────
+  async workout_today() {
+    const s = await todaySession();
+    if (!s) {
+      const wk = await currentWeek();
+      return { kind: 'observation', data: `Сьогодні за розкладом залу немає (тиждень циклу ${wk}). Розклад днів залу обирається щонеділі — /gym.` };
+    }
+    return { kind: 'observation', data: renderSession(s) };
+  },
+
+  async set_working_max(args) {
+    const query = String(args.exercise ?? '').trim().toLowerCase();
+    const rv6 = Number(args.rv6_kg);
+    if (!query || !Number.isFinite(rv6)) return { kind: 'done', message: 'Потрібна назва вправи і вага на 6 повторів.' };
+    const key = findMainKey(query);
+    if (!key) {
+      return { kind: 'done', message: `Не впізнала вправу «${args.exercise}». Головні: ${Object.values(MAIN_EXERCISES).join(', ')}.` };
+    }
+    await setMax(key, rv6);
+    return { kind: 'done', message: `💪 РВ6 «${MAIN_EXERCISES[key]}» = ${rv6} кг. Схема тижня перерахована.` };
+  },
+
+  async log_workout(args) {
+    const raw = Array.isArray(args.items) ? args.items : [];
+    if (!raw.length) return { kind: 'done', message: 'Що записати? Назви вправу, вагу і повтори.' };
+    const week = await currentWeek();
+    const lines: string[] = [];
+    const channelLines: ChannelLogLine[] = [];
+    for (const it of raw) {
+      const title = String(it.title ?? it.exercise ?? '').trim();
+      if (!title) continue;
+      const reps: number[] = Array.isArray(it.reps) ? it.reps.map(Number).filter(Number.isFinite) : [];
+      const weight = it.weight_kg != null ? Number(it.weight_kg) : null;
+      const key = findMainKey(title.toLowerCase());
+      const exerciseName = key ? MAIN_EXERCISES[key] : title;
+      await logWorkout({
+        exercise: exerciseName, weight, reps,
+        rir: it.rir != null ? String(it.rir) : undefined,
+        note: it.note ? String(it.note) : undefined,
+        week, source: 'manual',
+      });
+      const repsStr = reps.length ? reps.join(',') : '—';
+      lines.push(`✅ ${exerciseName}: ${weight ?? '—'} кг × ${repsStr}`);
+      channelLines.push({ exercise: exerciseName, weight, reps });
+    }
+    if (!lines.length) return { kind: 'done', message: 'Не вдалось розпізнати жоден запис.' };
+    postWorkoutToChannel(channelLines).catch(() => {}); // не блокує відповідь у боті
+    return { kind: 'done', message: lines.join('\n') };
+  },
+
+  async workout_progress(args) {
+    const query = String(args.exercise ?? '').trim().toLowerCase();
+    if (!query) {
+      return { kind: 'observation', data: 'Уточни, по якій вправі показати прогрес (напр. «жим лежачи»).' };
+    }
+    const key = findMainKey(query);
+    const exerciseName = key ? MAIN_EXERCISES[key] : String(args.exercise);
+    const rows = await logsForExercise(exerciseName, 8);
+    if (!rows.length) return { kind: 'observation', data: `Логів по «${exerciseName}» ще немає.` };
+    const lines = rows.map((r) => `${r.log_date}: ${r.weight} кг × ${(Array.isArray(r.reps) ? r.reps : []).join(',')}`);
+    return { kind: 'observation', data: `Прогрес «${exerciseName}»:\n${lines.join('\n')}` };
+  },
 };
+
+// Fuzzy-пошук головної вправи за довільним написанням назви (укр., частковий збіг)
+function findMainKey(query: string): MainKey | null {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  for (const [key, name] of Object.entries(MAIN_EXERCISES) as Array<[MainKey, string]>) {
+    const n = name.toLowerCase();
+    if (n.includes(q) || q.includes(n) || n.split(/\s+/).some((w) => w.length > 3 && q.includes(w))) return key;
+  }
+  // короткі побутові синоніми
+  if (/жим.*леж|леж.*жим|^жим$/.test(q)) return 'bench';
+  if (/скос|нахил.*жим/.test(q)) return 'incline';
+  if (/(верхн|блок|підтяг)/.test(q)) return 'pulldown';
+  if (/(наклон|тяга.*гант)/.test(q)) return 'dbrow';
+  if (/(плеч|сидяч|ohp)/.test(q)) return 'ohp';
+  return null;
+}
 
 // Єдиний диспетч — без if/else по типах
 export async function dispatch(name: string, args: Record<string, any>): Promise<ToolOutcome> {
@@ -469,6 +555,68 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       name: 'plan_done',
       description: 'Відмітити пункт тижневого плану виконаним за назвою.',
       parameters: { type: 'object', properties: { title_query: { type: 'string', description: 'Частина назви пункту' } }, required: ['title_query'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workout_today',
+      description: 'Показати сьогоднішнє залове тренування (силова програма) з розрахованими на цей тиждень вагами. Клич на "яке сьогодні тренування?", "що в залі сьогодні?".',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'set_working_max',
+      description: 'Задати робочу вагу (РВ6 — вага на чисті 6 повторів) для головної вправи програми. Клич на "постав робочу вагу жиму 100", "моя РВ6 в тязі 40".',
+      parameters: {
+        type: 'object',
+        properties: {
+          exercise: { type: 'string', description: 'Назва вправи, як сказав користувач (жим, тяга в наклоні, підтягування, скіс, плечі)' },
+          rv6_kg: { type: 'number', description: 'Вага в кг на 6 повторів' },
+        },
+        required: ['exercise', 'rv6_kg'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'log_workout',
+      description: 'Записати фактично виконаний підхід(и) тренування. Клич на "запиши жим 85 на 8,7", "зробив тягу 40 на 10". Можна кілька вправ одразу.',
+      parameters: {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array', description: 'Один або кілька записів',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: 'Назва вправи' },
+                weight_kg: { type: 'number', description: 'Вага в кг (опційно)' },
+                reps: { type: 'array', items: { type: 'integer' }, description: 'Повтори по підходах, напр. [8,7,6]' },
+                rir: { type: 'string', description: 'Запас повторів (опційно), напр. "2"' },
+                note: { type: 'string' },
+              },
+              required: ['title'],
+            },
+          },
+        },
+        required: ['items'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'workout_progress',
+      description: 'Показати історію ваг по конкретній вправі ("як мій жим?", "прогрес по тязі").',
+      parameters: {
+        type: 'object',
+        properties: { exercise: { type: 'string', description: 'Назва вправи' } },
+        required: ['exercise'],
+      },
     },
   },
 ];

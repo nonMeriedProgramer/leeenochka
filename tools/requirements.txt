@@ -1,0 +1,4 @@
+# Unofficial Garmin Connect client (cyberjunky). Read-only use.
+# If login breaks after a Garmin change: pip install -U garminconnect
+garminconnect>=0.2.14
+psycopg2-binary>=2.9
