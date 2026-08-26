@@ -26,10 +26,20 @@ export async function setMax(key: MainKey, rv6: number): Promise<void> {
 }
 
 // ─── Тиждень циклу ─────────────────────────────────────────────────
-export async function cycleStart(): Promise<string | null> {
-  const row = await db.get<{ started_on: string }>('SELECT started_on FROM training_state WHERE id = 1');
-  return row?.started_on ?? null;
+// pg повертає DATE-колонки як JS Date, а не рядок — приводимо явно до
+// 'YYYY-MM-DD', інакше нижче зламається парсинг дати.
+function toDateStr(v: unknown): string | null {
+  if (v == null) return null;
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  return String(v).slice(0, 10);
 }
+
+export async function cycleStart(): Promise<string | null> {
+  const row = await db.get<{ started_on: unknown }>('SELECT started_on FROM training_state WHERE id = 1');
+  return toDateStr(row?.started_on);
+}
+
+export { toDateStr };
 
 export async function startCycle(date = new Date().toISOString().slice(0, 10)): Promise<void> {
   await db.run(

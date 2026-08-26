@@ -30,8 +30,9 @@ export function startServer(bot: Bot, port = 3001, secretToken?: string): http.S
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(renderDashboardHtml(data));
       } catch (e) {
+        console.error('Dashboard error:', e);
         res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Dashboard error: ' + (e instanceof Error ? e.message : 'unknown'));
+        res.end('Dashboard error: ' + (e instanceof Error ? (e.stack ?? e.message) : 'unknown'));
       }
       return;
     }

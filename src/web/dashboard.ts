@@ -5,7 +5,7 @@
 
 import {
   getMaxes, currentWeek, cycleStart, resolveDay, recentLogs,
-  logsForExercise, gymScheduleFor, lastWeekGymDays,
+  logsForExercise, gymScheduleFor, lastWeekGymDays, toDateStr,
   DAYS as PROGRAM_DAYS, MAIN_EXERCISES, DAY_ORDER, dayUk,
 } from '../services/training/index.js';
 import { WEEKS, TOTAL_WEEKS, weightFromRV6 } from '../services/training/program.js';
@@ -37,7 +37,7 @@ export async function getDashboardData() {
   // хронологічно, лише валідні точки; топ-сет (перший записаний підхід) як оцінка 1ПМ
   const benchHistory = benchLogsDesc
     .filter((r) => r.weight != null && Array.isArray(r.reps) && r.reps.length > 0)
-    .map((r) => ({ date: r.log_date, oneRm: epley1RM(r.weight, r.reps[0]) }))
+    .map((r) => ({ date: toDateStr(r.log_date), oneRm: epley1RM(r.weight, r.reps[0]) }))
     .reverse();
 
   const lastBench = benchHistory.length ? benchHistory[benchHistory.length - 1].oneRm : null;
@@ -59,7 +59,7 @@ export async function getDashboardData() {
       exercises: s.exercises,
     })),
     recent: recent.map((r) => ({
-      date: r.log_date, exercise: r.exercise, weight: r.weight,
+      date: toDateStr(r.log_date), exercise: r.exercise, weight: r.weight,
       reps: Array.isArray(r.reps) ? r.reps : [], source: r.source,
     })),
     scheduleThisWeek: schedule.map((d) => DAY_SHORT[d]),
