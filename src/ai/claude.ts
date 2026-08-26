@@ -14,7 +14,7 @@ function freemodel() {
   return _freemodel ??= new OpenAI({ apiKey: process.env.FREEMODEL_API_KEY!, baseURL: 'https://api.freemodel.dev/v1' });
 }
 
-const CHAT_MODEL = 'llama-3.3-70b-versatile';
+const CHAT_MODEL = 'openai/gpt-oss-120b'; // llama-3.3-70b-versatile decommissioned by Groq
 const FALLBACK_MODEL = 'gpt-5.5';
 
 const fmtDate = (d: Date) => d.toLocaleDateString('uk-UA', { timeZone: 'Europe/Kyiv', dateStyle: 'long' });
