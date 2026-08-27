@@ -158,7 +158,10 @@ def fetch_wellness(garmin: "Garmin", cday: str) -> dict:
 
     readiness_score = None
     if isinstance(readiness, list) and readiness:
-        readiness_score = readiness[0].get("score")
+        # Garmin recalculates readiness several times through the day and returns
+        # all of them oldest-first; [0] was the very first (stale) number, not
+        # today's latest — same one shown on the watch is the last entry.
+        readiness_score = readiness[-1].get("score")
     elif isinstance(readiness, dict):
         readiness_score = readiness.get("score")
 
