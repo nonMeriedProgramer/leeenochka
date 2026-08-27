@@ -94,10 +94,15 @@ def authenticate(force_login: bool) -> "Garmin":
     return garmin
 
 
-def _safe(fn):
+def _safe(fn, label: str = ""):
     try:
-        return fn()
-    except Exception:  # noqa: BLE001
+        result = fn()
+        if label and not result:
+            print(f"[wellness] {label}: no data returned (Garmin has nothing for this day)")
+        return result
+    except Exception as e:  # noqa: BLE001
+        if label:
+            print(f"[wellness] {label} failed: {e}")
         return None
 
 
@@ -140,10 +145,10 @@ def _get(d, *path):
 
 # ── wellness (sleep, HRV, body battery, ...) ──────────────────────────────────
 def fetch_wellness(garmin: "Garmin", cday: str) -> dict:
-    summary = _safe(lambda: garmin.get_user_summary(cday)) or {}
-    hrv = _safe(lambda: garmin.get_hrv_data(cday)) or {}
-    sleep = _safe(lambda: garmin.get_sleep_data(cday)) or {}
-    readiness = _safe(lambda: garmin.get_training_readiness(cday))
+    summary = _safe(lambda: garmin.get_user_summary(cday), f"get_user_summary({cday})") or {}
+    hrv = _safe(lambda: garmin.get_hrv_data(cday), f"get_hrv_data({cday})") or {}
+    sleep = _safe(lambda: garmin.get_sleep_data(cday), f"get_sleep_data({cday})") or {}
+    readiness = _safe(lambda: garmin.get_training_readiness(cday), f"get_training_readiness({cday})")
 
     sleep_seconds = _get(sleep, "dailySleepDTO", "sleepTimeSeconds")
     sleep_hours = round(sleep_seconds / 3600, 1) if sleep_seconds else None

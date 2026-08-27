@@ -439,7 +439,7 @@ export function createBot(token: string) {
         timeout: 120_000,
         env: process.env,
       });
-      const tail = (stdout || stderr || '').trim().split('\n').slice(-6).join('\n');
+      const tail = (stdout || stderr || '').trim().split('\n').slice(-20).join('\n');
       await ctx.reply(`✅ Готово:\n${tail || '(без виводу)'}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
