@@ -72,7 +72,7 @@ def authenticate(force_login: bool) -> "Garmin":
 
     if token_b64 and not force_login:
         garmin = Garmin()
-        garmin.garth.loads(base64.b64decode(token_b64).decode("utf-8"))
+        garmin.client.loads(base64.b64decode(token_b64).decode("utf-8"))
         return garmin
 
     if not force_login:
@@ -89,8 +89,8 @@ def authenticate(force_login: bool) -> "Garmin":
         sys.exit("Set GARMIN_EMAIL and GARMIN_PASSWORD for the first login (or reuse GARMIN_TOKEN_B64 from fitflow).")
 
     garmin = Garmin(email=email, password=password, prompt_mfa=_prompt_mfa)
-    garmin.login()
-    garmin.garth.dump(TOKENSTORE)
+    garmin.login(TOKENSTORE)  # tokenstore path → library persists tokens there automatically
+    garmin.client.dump(TOKENSTORE)
     return garmin
 
 
@@ -278,8 +278,8 @@ def main() -> None:
     garmin = authenticate(force_login=args.login)
 
     if args.login:
-        garmin.garth.dump(TOKENSTORE)
-        bundle = base64.b64encode(garmin.garth.dumps().encode("utf-8")).decode("utf-8")
+        garmin.client.dump(TOKENSTORE)
+        bundle = base64.b64encode(garmin.client.dumps().encode("utf-8")).decode("utf-8")
         print("\nLogin OK. Token saved to", TOKENSTORE)
         print("\nFor a scheduled/headless run, save this as GARMIN_TOKEN_B64:\n")
         print(bundle)
