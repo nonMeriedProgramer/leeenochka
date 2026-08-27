@@ -72,7 +72,10 @@ def authenticate(force_login: bool) -> "Garmin":
 
     if token_b64 and not force_login:
         garmin = Garmin()
-        garmin.client.loads(base64.b64decode(token_b64).decode("utf-8"))
+        # .login(<token string>) (not .client.loads) — login() also fetches the profile
+        # afterwards and sets garmin.display_name, which get_user_summary/get_sleep_data
+        # need internally. Loading tokens directly via .client.loads() skips that step.
+        garmin.login(base64.b64decode(token_b64).decode("utf-8"))
         return garmin
 
     if not force_login:
