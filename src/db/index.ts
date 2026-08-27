@@ -127,6 +127,22 @@ export async function initDb(): Promise<void> {
       days       JSONB NOT NULL DEFAULT '[]'::jsonb
     );
 
+    -- Щоденні дані відновлення з Garmin (сон, HRV, body battery, ...) — пише tools/garmin_sync.py
+    CREATE TABLE IF NOT EXISTS garmin_wellness (
+      date                DATE PRIMARY KEY,
+      resting_hr          INTEGER,
+      hrv_ms              INTEGER,
+      sleep_hours         NUMERIC,
+      sleep_score         INTEGER,
+      body_battery_high   INTEGER,
+      body_battery_low    INTEGER,
+      stress_avg          INTEGER,
+      steps               INTEGER,
+      training_readiness  INTEGER,
+      raw                 JSONB,
+      updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     -- Закриваємо таблиці від публічного REST API Supabase (anon-ключ).
     -- Бот — власник таблиць (роль postgres) — RLS обходить, тож працює як і раніше.
     ALTER TABLE memories          ENABLE ROW LEVEL SECURITY;
@@ -140,6 +156,7 @@ export async function initDb(): Promise<void> {
     ALTER TABLE training_logs     ENABLE ROW LEVEL SECURITY;
     ALTER TABLE garmin_activities ENABLE ROW LEVEL SECURITY;
     ALTER TABLE gym_schedule      ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE garmin_wellness   ENABLE ROW LEVEL SECURITY;
   `);
   console.log('✅ DB ready (Postgres)');
 }

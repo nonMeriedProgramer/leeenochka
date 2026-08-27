@@ -1,0 +1,11 @@
+# Fly.io build config: додає Python поруч зі стандартним Node-білдом,
+# щоб бот міг запускати tools/garmin_sync.py прямо в своєму контейнері
+# (команда /garmin_sync у боті шле child_process на цей самий python3).
+[phases.setup]
+nixPkgs = ["nodejs_22", "python311", "python311Packages.pip"]
+
+[phases.install]
+cmds = [
+  "npm ci",
+  "python3 -m pip install --no-cache-dir --break-system-packages -r tools/requirements.txt",
+]

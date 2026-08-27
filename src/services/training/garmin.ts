@@ -55,6 +55,40 @@ function humanize(category: string): string {
 
 export interface GarminProposal { label: string; create: () => Promise<string>; }
 
+// ─── Wellness (сон, HRV, body battery, ...) — пише tools/garmin_sync.py ────
+export interface WellnessRow {
+  date: string;
+  resting_hr: number | null;
+  hrv_ms: number | null;
+  sleep_hours: number | null;
+  sleep_score: number | null;
+  body_battery_high: number | null;
+  body_battery_low: number | null;
+  stress_avg: number | null;
+  steps: number | null;
+  training_readiness: number | null;
+}
+
+export async function wellnessFor(date: string): Promise<WellnessRow | null> {
+  const row = await db.get<WellnessRow>('SELECT * FROM garmin_wellness WHERE date = $1', [date]);
+  return row ?? null;
+}
+
+/** Один рядок для ранкового брифу; null, якщо по цій даті ще нічого не засинхронізовано. */
+export function renderWellness(w: WellnessRow): string | null {
+  const parts: string[] = [];
+  if (w.sleep_score != null) {
+    parts.push(`😴 Сон: ${w.sleep_score}/100${w.sleep_hours != null ? ` (${w.sleep_hours} год)` : ''}`);
+  } else if (w.sleep_hours != null) {
+    parts.push(`😴 Сон: ${w.sleep_hours} год`);
+  }
+  if (w.body_battery_high != null) {
+    parts.push(`🔋 ${w.body_battery_high}${w.body_battery_low != null ? `→${w.body_battery_low}` : ''}`);
+  }
+  if (w.training_readiness != null) parts.push(`💪 Готовність: ${w.training_readiness}`);
+  return parts.length ? parts.join(' · ') : null;
+}
+
 export async function pendingGarminActivities(): Promise<GarminActivityRow[]> {
   return db.query<GarminActivityRow>(
     "SELECT garmin_id, activity_date, type, name, parsed FROM garmin_activities WHERE processed = false ORDER BY activity_date DESC",

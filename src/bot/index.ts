@@ -1,4 +1,7 @@
 import { Bot, InlineKeyboard } from 'grammy';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import path from 'node:path';
 import { ownerGuard } from './guard.js';
 import { runAgent } from '../ai/agent.js';
 import { saveMessage } from '../ai/claude.js';
@@ -17,6 +20,9 @@ import {
   DAYS as GYM_DAYS, gymScheduleFor, setGymSchedule, lastWeekGymDays,
   dayIndexInSchedule, resolveDay, renderSession, cycleStart, startCycle,
 } from '../services/training/index.js';
+import { buildMorningBrief } from '../services/brief/index.js';
+
+const execFileAsync = promisify(execFile);
 
 // Очікувані дії (бот однокористувацький — owner-only, module-level стан ок)
 let pendingAction: { execute: () => Promise<string> } | null = null;     // ✅/❌ підтвердження
@@ -415,6 +421,30 @@ export function createBot(token: string) {
   // ─── /gym — обрати дні залу на тиждень ───────────────────────
   bot.command('gym', async (ctx) => {
     await sendGymPicker(bot, ctx.chat.id);
+  });
+
+  // ─── /brief — ранковий бриф на вимогу (для тесту, поза розкладом 8:00) ──
+  bot.command('brief', async (ctx) => {
+    await ctx.reply(await buildMorningBrief());
+  });
+
+  // ─── /garmin_sync — ручний запуск tools/garmin_sync.py (сон/HRV/body battery + силові сети) ──
+  // Скрипт живе в тому ж контейнері, що й бот (python3 з nixpacks.toml), тож нічого локально
+  // запускати не треба — команда працює прямо з телефону чи ПК-версії Telegram.
+  bot.command('garmin_sync', async (ctx) => {
+    await ctx.reply('⏳ Тягну дані з Garmin (сон, HRV, body battery, силові сети)...');
+    const script = path.resolve(process.cwd(), 'tools', 'garmin_sync.py');
+    try {
+      const { stdout, stderr } = await execFileAsync('python3', [script, '--days', '3'], {
+        timeout: 120_000,
+        env: process.env,
+      });
+      const tail = (stdout || stderr || '').trim().split('\n').slice(-6).join('\n');
+      await ctx.reply(`✅ Готово:\n${tail || '(без виводу)'}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await ctx.reply(`❌ Помилка синку Garmin:\n${msg.slice(0, 500)}`);
+    }
   });
 
   // ─── /progress ────────────────────────────────────────────────

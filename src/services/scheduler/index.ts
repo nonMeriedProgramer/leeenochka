@@ -1,30 +1,17 @@
 import type { Bot } from 'grammy';
 import db from '../../db/index.js';
 import { presentChecklist, sendPlanBoard, sendWeeklyReport, sendPlanPrompt, sendGymPicker } from '../../bot/index.js';
-import { generateIdeas } from '../../ai/agent.js';
 import { isCalendarConnected, getUpcomingEvents } from '../calendar/index.js';
 import { kyivWeekStart, nextWeekStart, closePastWeeks, ensureWeekSeeded } from '../plan/index.js';
 import { pendingGarminActivities, markGarminProcessed, proposalsFromActivity } from '../training/garmin.js';
+import { buildMorningBrief } from '../brief/index.js';
+import { kyivNow, timeKyiv } from '../../utils/kyiv.js';
 
 const TICK_MS = 30_000; // перевірка кожні 30с
 
 function ownerId(): number | null {
   const id = Number(process.env.OWNER_TELEGRAM_ID);
   return Number.isFinite(id) ? id : null;
-}
-
-// Поточний час у Києві
-function kyivNow(): { hour: number; minute: number; date: string; weekday: string } {
-  const p = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Europe/Kyiv', hour12: false, weekday: 'short',
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  }).formatToParts(new Date());
-  const g = (t: string) => p.find(x => x.type === t)?.value ?? '';
-  return { hour: Number(g('hour')), minute: Number(g('minute')), date: `${g('year')}-${g('month')}-${g('day')}`, weekday: g('weekday') };
-}
-
-function timeKyiv(iso: string): string {
-  return new Date(iso).toLocaleTimeString('uk-UA', { timeZone: 'Europe/Kyiv', hour: '2-digit', minute: '2-digit' });
 }
 
 // ─── Нагадування, яким настав час ───────────────────────────────
@@ -52,25 +39,9 @@ async function maybeMorningBrief(bot: Bot) {
   if (hour !== 8 || minute > 5 || lastBriefDate === date) return;
   lastBriefDate = date;
 
-  const todayStr = new Date().toLocaleDateString('uk-UA', { timeZone: 'Europe/Kyiv' });
-  let planLines = 'на сьогодні нічого не заплановано.';
-  if (isCalendarConnected()) {
-    const events = (await getUpcomingEvents(1))
-      .filter(e => e.start && new Date(e.start).toLocaleDateString('uk-UA', { timeZone: 'Europe/Kyiv' }) === todayStr);
-    if (events.length) planLines = events.map(e => `• ${timeKyiv(e.start)} ${e.title}`).join('\n');
-  }
-
   try {
-    await bot.api.sendMessage(owner, `☀️ Доброго ранку!\n\n📅 План на сьогодні:\n${planLines}`);
-  } catch { return; }
-
-  // Ідеї заповнити день (чеклист з галочками)
-  try {
-    const ideas = await generateIdeas(
-      `Розклад на сьогодні:\n${planLines}\nЗапропонуй 3 короткі корисні справи заповнити вільний час, врахуй вподобання користувача.`,
-    );
-    if (ideas.length) await presentChecklist(bot, owner, '💡 Ідеї на день — познач що додати:', ideas);
-  } catch { /* без ідей — не критично */ }
+    await bot.api.sendMessage(owner, await buildMorningBrief());
+  } catch { /* нема кому слати */ }
 }
 
 // ─── Нагадування про події календаря (за LEAD хв до початку) ────

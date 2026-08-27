@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Pull strength-training sets (weight/reps Garmin auto-detected on the watch)
-plus recent cardio activities, and stage them in Leeenochka's own Postgres
-for the bot to propose into training_logs.
+Pull strength-training sets (weight/reps Garmin auto-detected on the watch),
+recent cardio activities, and daily wellness (sleep, HRV, body battery,
+training readiness), and stage them in Leeenochka's own Postgres — sets/
+cardio for the bot to propose into training_logs, wellness for the morning
+brief (garmin_wellness table).
 
 Built on the open-source python-garminconnect library by cyberjunky:
 https://github.com/cyberjunky/python-garminconnect
@@ -128,6 +130,44 @@ def parse_exercise_sets(raw: dict) -> list:
     return groups
 
 
+def _get(d, *path):
+    for key in path:
+        if not isinstance(d, dict):
+            return None
+        d = d.get(key)
+    return d
+
+
+# ── wellness (sleep, HRV, body battery, ...) ──────────────────────────────────
+def fetch_wellness(garmin: "Garmin", cday: str) -> dict:
+    summary = _safe(lambda: garmin.get_user_summary(cday)) or {}
+    hrv = _safe(lambda: garmin.get_hrv_data(cday)) or {}
+    sleep = _safe(lambda: garmin.get_sleep_data(cday)) or {}
+    readiness = _safe(lambda: garmin.get_training_readiness(cday))
+
+    sleep_seconds = _get(sleep, "dailySleepDTO", "sleepTimeSeconds")
+    sleep_hours = round(sleep_seconds / 3600, 1) if sleep_seconds else None
+
+    readiness_score = None
+    if isinstance(readiness, list) and readiness:
+        readiness_score = readiness[0].get("score")
+    elif isinstance(readiness, dict):
+        readiness_score = readiness.get("score")
+
+    return {
+        "date": cday,
+        "resting_hr": summary.get("restingHeartRate"),
+        "hrv_ms": _get(hrv, "hrvSummary", "lastNightAvg"),
+        "sleep_hours": sleep_hours,
+        "sleep_score": _get(sleep, "dailySleepDTO", "sleepScores", "overall", "value"),
+        "body_battery_high": summary.get("bodyBatteryHighestValue"),
+        "body_battery_low": summary.get("bodyBatteryLowestValue"),
+        "stress_avg": summary.get("averageStressLevel"),
+        "steps": summary.get("totalSteps"),
+        "training_readiness": readiness_score,
+    }
+
+
 def fetch_strength_activities(garmin: "Garmin", start: str, end: str) -> list:
     acts = _safe(lambda: garmin.get_activities_by_date(start, end)) or []
     out = []
@@ -184,6 +224,49 @@ def sink_postgres(rows: list) -> None:
         conn.close()
 
 
+def sink_wellness_postgres(rows: list) -> None:
+    try:
+        import psycopg2
+        from psycopg2.extras import Json
+    except ImportError:
+        sys.exit("Missing dependency. Run:  pip install -r requirements.txt")
+
+    dsn = os.getenv("DATABASE_URL")
+    if not dsn:
+        sys.exit("Set DATABASE_URL to the SAME Postgres the bot uses (see script docstring).")
+
+    conn = psycopg2.connect(dsn)
+    try:
+        with conn, conn.cursor() as cur:
+            for w in rows:
+                cur.execute(
+                    """
+                    INSERT INTO garmin_wellness
+                        (date, resting_hr, hrv_ms, sleep_hours, sleep_score,
+                         body_battery_high, body_battery_low, stress_avg, steps, training_readiness, raw, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                    ON CONFLICT (date) DO UPDATE SET
+                        resting_hr         = EXCLUDED.resting_hr,
+                        hrv_ms             = EXCLUDED.hrv_ms,
+                        sleep_hours        = EXCLUDED.sleep_hours,
+                        sleep_score        = EXCLUDED.sleep_score,
+                        body_battery_high  = EXCLUDED.body_battery_high,
+                        body_battery_low   = EXCLUDED.body_battery_low,
+                        stress_avg         = EXCLUDED.stress_avg,
+                        steps              = EXCLUDED.steps,
+                        training_readiness = EXCLUDED.training_readiness,
+                        raw                = EXCLUDED.raw,
+                        updated_at         = now()
+                    """,
+                    (w["date"], w["resting_hr"], w["hrv_ms"], w["sleep_hours"], w["sleep_score"],
+                     w["body_battery_high"], w["body_battery_low"], w["stress_avg"], w["steps"],
+                     w["training_readiness"], Json(w)),
+                )
+        print(f"Upserted {len(rows)} days into garmin_wellness.")
+    finally:
+        conn.close()
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sync Garmin strength sets + cardio into Leeenochka's Postgres.")
@@ -208,13 +291,21 @@ def main() -> None:
 
     rows = fetch_strength_activities(garmin, start, end)
 
-    if args.dry_run or not rows:
-        print(json.dumps(rows, ensure_ascii=False, indent=2))
-        if not rows:
-            print("\n(No strength_training activities in this window — nothing to write.)")
+    # Wellness — окремі API-виклики на кожен день, тож не тягнемо на всю ширину --days,
+    # трьох останніх днів вистачає для ранкового брифу (сон рахується за минулу ніч).
+    wellness_days = [(today - timedelta(days=i)).isoformat() for i in range(min(args.days, 3))]
+    wellness = [fetch_wellness(garmin, d) for d in wellness_days]
+
+    if args.dry_run:
+        print(json.dumps({"activities": rows, "wellness": wellness}, ensure_ascii=False, indent=2))
         return
 
-    sink_postgres(rows)
+    if rows:
+        sink_postgres(rows)
+    else:
+        print("(No strength_training activities in this window.)")
+
+    sink_wellness_postgres(wellness)
 
 
 if __name__ == "__main__":
