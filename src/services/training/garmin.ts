@@ -64,6 +64,7 @@ export interface WellnessRow {
   sleep_score: number | null;
   body_battery_high: number | null;
   body_battery_low: number | null;
+  body_battery_current: number | null;
   stress_avg: number | null;
   steps: number | null;
   training_readiness: number | null;
@@ -82,9 +83,7 @@ export function renderWellness(w: WellnessRow): string | null {
   } else if (w.sleep_hours != null) {
     parts.push(`😴 Сон: ${w.sleep_hours} год`);
   }
-  if (w.body_battery_high != null) {
-    parts.push(`🔋 ${w.body_battery_high}${w.body_battery_low != null ? `→${w.body_battery_low}` : ''}`);
-  }
+  if (w.body_battery_current != null) parts.push(`🔋 ${w.body_battery_current}`);
   if (w.training_readiness != null) parts.push(`💪 Готовність: ${w.training_readiness}`);
   return parts.length ? parts.join(' · ') : null;
 }

@@ -173,6 +173,7 @@ def fetch_wellness(garmin: "Garmin", cday: str) -> dict:
         "sleep_score": _get(sleep, "dailySleepDTO", "sleepScores", "overall", "value"),
         "body_battery_high": summary.get("bodyBatteryHighestValue"),
         "body_battery_low": summary.get("bodyBatteryLowestValue"),
+        "body_battery_current": summary.get("bodyBatteryMostRecentValue"),
         "stress_avg": summary.get("averageStressLevel"),
         "steps": summary.get("totalSteps"),
         "training_readiness": readiness_score,
@@ -254,24 +255,26 @@ def sink_wellness_postgres(rows: list) -> None:
                     """
                     INSERT INTO garmin_wellness
                         (date, resting_hr, hrv_ms, sleep_hours, sleep_score,
-                         body_battery_high, body_battery_low, stress_avg, steps, training_readiness, raw, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                         body_battery_high, body_battery_low, body_battery_current,
+                         stress_avg, steps, training_readiness, raw, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
                     ON CONFLICT (date) DO UPDATE SET
-                        resting_hr         = EXCLUDED.resting_hr,
-                        hrv_ms             = EXCLUDED.hrv_ms,
-                        sleep_hours        = EXCLUDED.sleep_hours,
-                        sleep_score        = EXCLUDED.sleep_score,
-                        body_battery_high  = EXCLUDED.body_battery_high,
-                        body_battery_low   = EXCLUDED.body_battery_low,
-                        stress_avg         = EXCLUDED.stress_avg,
-                        steps              = EXCLUDED.steps,
-                        training_readiness = EXCLUDED.training_readiness,
-                        raw                = EXCLUDED.raw,
-                        updated_at         = now()
+                        resting_hr           = EXCLUDED.resting_hr,
+                        hrv_ms               = EXCLUDED.hrv_ms,
+                        sleep_hours          = EXCLUDED.sleep_hours,
+                        sleep_score          = EXCLUDED.sleep_score,
+                        body_battery_high    = EXCLUDED.body_battery_high,
+                        body_battery_low     = EXCLUDED.body_battery_low,
+                        body_battery_current = EXCLUDED.body_battery_current,
+                        stress_avg           = EXCLUDED.stress_avg,
+                        steps                = EXCLUDED.steps,
+                        training_readiness   = EXCLUDED.training_readiness,
+                        raw                  = EXCLUDED.raw,
+                        updated_at           = now()
                     """,
                     (w["date"], w["resting_hr"], w["hrv_ms"], w["sleep_hours"], w["sleep_score"],
-                     w["body_battery_high"], w["body_battery_low"], w["stress_avg"], w["steps"],
-                     w["training_readiness"], Json(w)),
+                     w["body_battery_high"], w["body_battery_low"], w["body_battery_current"],
+                     w["stress_avg"], w["steps"], w["training_readiness"], Json(w)),
                 )
         print(f"Upserted {len(rows)} days into garmin_wellness.")
     finally:
