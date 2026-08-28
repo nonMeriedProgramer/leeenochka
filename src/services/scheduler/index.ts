@@ -4,7 +4,7 @@ import { presentChecklist, sendPlanBoard, sendWeeklyReport, sendPlanPrompt, send
 import { isCalendarConnected, getUpcomingEvents } from '../calendar/index.js';
 import { kyivWeekStart, nextWeekStart, closePastWeeks, ensureWeekSeeded } from '../plan/index.js';
 import { pendingGarminActivities, markGarminProcessed, proposalsFromActivity } from '../training/garmin.js';
-import { buildMorningBrief } from '../brief/index.js';
+import { sendMorningBrief } from '../brief/index.js';
 import { runGarminSync } from '../training/garminSync.js';
 import { kyivNow, timeKyiv } from '../../utils/kyiv.js';
 
@@ -44,7 +44,7 @@ async function maybeMorningBrief(bot: Bot) {
   try { await runGarminSync(); } catch { /* синк не вдався — шлемо бриф без wellness */ }
 
   try {
-    await bot.api.sendMessage(owner, await buildMorningBrief());
+    await sendMorningBrief(bot.api, owner);
   } catch { /* нема кому слати */ }
 }
 

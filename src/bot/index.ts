@@ -17,7 +17,7 @@ import {
   DAYS as GYM_DAYS, gymScheduleFor, setGymSchedule, lastWeekGymDays,
   dayIndexInSchedule, resolveDay, renderSession, cycleStart, startCycle,
 } from '../services/training/index.js';
-import { buildMorningBrief } from '../services/brief/index.js';
+import { sendMorningBrief } from '../services/brief/index.js';
 import { runGarminSync } from '../services/training/garminSync.js';
 
 // Очікувані дії (бот однокористувацький — owner-only, module-level стан ок)
@@ -421,7 +421,7 @@ export function createBot(token: string) {
 
   // ─── /brief — ранковий бриф на вимогу (для тесту, поза розкладом 8:00) ──
   bot.command('brief', async (ctx) => {
-    await ctx.reply(await buildMorningBrief());
+    await sendMorningBrief(ctx.api, ctx.chat.id);
   });
 
   // ─── /garmin_sync — ручний запуск синку (сон/HRV/body battery + силові сети) ──
