@@ -1,7 +1,4 @@
 import { Bot, InlineKeyboard } from 'grammy';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import path from 'node:path';
 import { ownerGuard } from './guard.js';
 import { runAgent } from '../ai/agent.js';
 import { saveMessage } from '../ai/claude.js';
@@ -21,8 +18,7 @@ import {
   dayIndexInSchedule, resolveDay, renderSession, cycleStart, startCycle,
 } from '../services/training/index.js';
 import { buildMorningBrief } from '../services/brief/index.js';
-
-const execFileAsync = promisify(execFile);
+import { runGarminSync } from '../services/training/garminSync.js';
 
 // Очікувані дії (бот однокористувацький — owner-only, module-level стан ок)
 let pendingAction: { execute: () => Promise<string> } | null = null;     // ✅/❌ підтвердження
@@ -428,18 +424,12 @@ export function createBot(token: string) {
     await ctx.reply(await buildMorningBrief());
   });
 
-  // ─── /garmin_sync — ручний запуск tools/garmin_sync.py (сон/HRV/body battery + силові сети) ──
-  // Скрипт живе в тому ж контейнері, що й бот (python3 з nixpacks.toml), тож нічого локально
-  // запускати не треба — команда працює прямо з телефону чи ПК-версії Telegram.
+  // ─── /garmin_sync — ручний запуск синку (сон/HRV/body battery + силові сети) ──
+  // Той самий синк, що автоматично йде перед ранковим брифом (див. scheduler).
   bot.command('garmin_sync', async (ctx) => {
     await ctx.reply('⏳ Тягну дані з Garmin (сон, HRV, body battery, силові сети)...');
-    const script = path.resolve(process.cwd(), 'tools', 'garmin_sync.py');
     try {
-      const { stdout, stderr } = await execFileAsync('python3', [script, '--days', '3'], {
-        timeout: 120_000,
-        env: process.env,
-      });
-      const tail = (stdout || stderr || '').trim().split('\n').slice(-20).join('\n');
+      const tail = (await runGarminSync()).split('\n').slice(-20).join('\n');
       await ctx.reply(`✅ Готово:\n${tail || '(без виводу)'}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
