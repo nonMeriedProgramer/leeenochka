@@ -1,16 +1,12 @@
-import { GoogleGenAI } from '@google/genai';
 import type { WellnessRow } from '../training/garmin.js';
 
-// Nano Banana — Gemini 2.5 Flash Image. Малює гарний ранковий дашборд-скрін у стилі
-// AlterMe з РЕАЛЬНИМИ даними Garmin. Недетерміновано (числа може іноді спотворити),
-// тому це доповнення до тексту брифу, а не заміна: текст завжди йде як підпис (caption).
+// Картинка ранкового брифу через OpenRouter Image API (POST /api/v1/images).
+// Малює темний дашборд у стилі AlterMe з РЕАЛЬНИХ даних Garmin. Недетерміновано
+// (числа може іноді спотворити), тому це доповнення до тексту брифу, а не заміна:
+// текст завжди йде як підпис (caption). Модель — налаштовувана через env,
+// дефолт google/gemini-2.5-flash-image (Nano Banana — сильний у тексті/цифрах).
 
-let _ai: GoogleGenAI | null = null;
-function ai(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
-  return _ai ??= new GoogleGenAI({ apiKey });
-}
+const IMAGE_MODEL = process.env.OPENROUTER_IMAGE_MODEL || 'google/gemini-2.5-flash-image';
 
 // Рядки-картки для промту — лише ті метрики, що реально є в даних.
 function metricLines(w: WellnessRow): string[] {
@@ -53,21 +49,31 @@ ${metricLines(w).join('\n')}
 No bottom navigation bar, no company logo, no branding, no watermark, no photographic elements, no people, no extra text beyond the labels and numbers listed. High quality, sharp, legible.`;
 }
 
+interface OpenRouterImageResponse {
+  data?: Array<{ b64_json?: string; media_type?: string }>;
+}
+
 /** Генерує PNG ранкового дашборду; null якщо немає ключа або генерація не вдалась. */
 export async function generateBriefImage(w: WellnessRow, dateLabel: string): Promise<Buffer | null> {
-  const client = ai();
-  if (!client) return null;
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) return null;
   try {
-    const res = await client.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: buildPrompt(w, dateLabel),
+    const res = await fetch('https://openrouter.ai/api/v1/images', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'X-Title': 'Leeenochka',
+      },
+      body: JSON.stringify({ model: IMAGE_MODEL, prompt: buildPrompt(w, dateLabel) }),
     });
-    const parts = res.candidates?.[0]?.content?.parts ?? [];
-    for (const part of parts) {
-      const data = part.inlineData?.data;
-      if (data) return Buffer.from(data, 'base64');
+    if (!res.ok) {
+      console.error('generateBriefImage HTTP', res.status, (await res.text()).slice(0, 300));
+      return null;
     }
-    return null;
+    const json = await res.json() as OpenRouterImageResponse;
+    const b64 = json.data?.[0]?.b64_json;
+    return b64 ? Buffer.from(b64, 'base64') : null;
   } catch (e) {
     console.error('generateBriefImage failed:', e instanceof Error ? e.message : e);
     return null;
