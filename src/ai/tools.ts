@@ -7,13 +7,14 @@ import { createReminder, getReminders, isRemindersConnected } from '../services/
 import { createTask } from '../services/notion/index.js';
 import db from '../db/index.js';
 import { addPlanItem, addRecurring, dayKeyFromText, findItemByTitle, makeRecurring, plural, togglePlanItem } from '../services/plan/index.js';
-import { kyivOffset } from '../utils/kyiv.js';
+import { kyivOffset, kyivNow } from '../utils/kyiv.js';
 import {
   MAIN_EXERCISES, type MainKey,
   getMaxes, setMax, todaySession, resolveDay, renderSession,
   logWorkout, logsForExercise, DAYS, currentWeek,
 } from '../services/training/index.js';
 import { postWorkoutToChannel, type ChannelLogLine } from '../services/training/channel.js';
+import { wellnessFor, renderWellnessDetail } from '../services/training/garmin.js';
 
 // ─── Результат виклику інструмента ──────────────────────────────
 // observation — дані назад моделі (read), цикл триває
@@ -316,7 +317,21 @@ const HANDLERS: Record<string, Handler> = {
     const lines = rows.map((r) => `${r.log_date}: ${r.weight} кг × ${(Array.isArray(r.reps) ? r.reps : []).join(',')}`);
     return { kind: 'observation', data: `Прогрес «${exerciseName}»:\n${lines.join('\n')}` };
   },
+
+  async health_today() {
+    const { date } = kyivNow();
+    const w = (await wellnessFor(date)) ?? (await wellnessFor(yesterdayKyiv(date)));
+    if (!w) return { kind: 'observation', data: 'Даних з Garmin ще немає. Запусти /garmin_sync (або зачекай ранкового синку).' };
+    return { kind: 'observation', data: renderWellnessDetail(w) };
+  },
 };
+
+// Вчорашня київська дата рядком 'YYYY-MM-DD' (fallback, коли за сьогодні синк ще не проходив).
+function yesterdayKyiv(today: string): string {
+  const d = new Date(today + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
 
 // Fuzzy-пошук головної вправи за довільним написанням назви (укр., частковий збіг)
 function findMainKey(query: string): MainKey | null {
@@ -617,6 +632,14 @@ export const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
         properties: { exercise: { type: 'string', description: 'Назва вправи' } },
         required: ['exercise'],
       },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'health_today',
+      description: 'Показати сьогоднішні дані відновлення з Garmin: сон (score/години), Body Battery, готовність до тренування, HRV, пульс спокою, стрес, кроки. Клич на "що по боді бетері", "як я спав", "яка готовність", "скільки кроків", "мій пульс спокою", "рівень стресу".',
+      parameters: { type: 'object', properties: {} },
     },
   },
 ];

@@ -88,6 +88,27 @@ export function renderWellness(w: WellnessRow): string | null {
   return parts.length ? parts.join(' · ') : null;
 }
 
+/** Детальний багаторядковий опис усіх наявних метрик — для AI-агента (питання про сон/стрес/пульс/…). */
+export function renderWellnessDetail(w: WellnessRow): string {
+  const lines: string[] = [];
+  if (w.sleep_score != null || w.sleep_hours != null) {
+    const score = w.sleep_score != null ? `${w.sleep_score}/100` : '';
+    const hours = w.sleep_hours != null ? `${w.sleep_hours} год` : '';
+    lines.push(`😴 Сон: ${[score, hours].filter(Boolean).join(', ')}`);
+  }
+  if (w.body_battery_current != null) {
+    const range = (w.body_battery_high != null && w.body_battery_low != null)
+      ? ` (за день ${w.body_battery_high}→${w.body_battery_low})` : '';
+    lines.push(`🔋 Body Battery зараз: ${w.body_battery_current}${range}`);
+  }
+  if (w.training_readiness != null) lines.push(`💪 Готовність до тренування: ${w.training_readiness}/100`);
+  if (w.hrv_ms != null) lines.push(`❤️ HRV (за ніч): ${w.hrv_ms} мс`);
+  if (w.resting_hr != null) lines.push(`🫀 Пульс спокою: ${w.resting_hr} уд/хв`);
+  if (w.stress_avg != null) lines.push(`😰 Середній стрес: ${w.stress_avg}`);
+  if (w.steps != null) lines.push(`👟 Кроки: ${w.steps}`);
+  return lines.length ? lines.join('\n') : 'По цій даті ще немає даних з Garmin.';
+}
+
 export async function pendingGarminActivities(): Promise<GarminActivityRow[]> {
   return db.query<GarminActivityRow>(
     "SELECT garmin_id, activity_date, type, name, parsed FROM garmin_activities WHERE processed = false ORDER BY activity_date DESC",
