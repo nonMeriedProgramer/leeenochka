@@ -1,6 +1,6 @@
-// Локальний тест генерації картинки брифу.
-// Запуск (з D:\openclaw, у .env має бути GEMINI_API_KEY):
-//   node --env-file=.env --import=tsx/esm tools/test_brief_image.ts
+// Локальний тест генерації картинки брифу (малюється кодом, ключі не потрібні).
+// Запуск (з D:\openclaw):
+//   node --import=tsx/esm tools/test_brief_image.ts
 // Результат — файл brief.png у корені проєкту.
 import * as fs from 'node:fs';
 import { generateBriefImage } from '../src/services/brief/image.js';
@@ -22,7 +22,7 @@ const sample: WellnessRow = {
 
 const png = await generateBriefImage(sample, 'четвер, 28 серпня');
 if (!png) {
-  console.error('❌ Картинку не згенеровано (немає GEMINI_API_KEY або помилка генерації).');
+  console.error('❌ Картинку не згенеровано (помилка рендеру).');
   process.exit(1);
 }
 fs.writeFileSync('brief.png', png);
