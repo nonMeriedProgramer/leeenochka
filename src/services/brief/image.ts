@@ -103,15 +103,20 @@ function canvasHeight(w: WellnessRow): number {
   return h;
 }
 
-/** Генерує PNG ранкового дашборду; null якщо рендер не вдався. */
+/** Рендерить PNG дашборду; КИДАЄ помилку (для діагностики). */
+export async function renderBriefImage(w: WellnessRow, dateLabel: string): Promise<Buffer> {
+  const width = 1080;
+  const height = canvasHeight(w);
+  const markup = html(buildHtml(w, dateLabel));
+  const svg = await satori(markup as Parameters<typeof satori>[0], { width, height, fonts: fonts() });
+  const png = new Resvg(svg, { fitTo: { mode: 'width', value: width } }).render().asPng();
+  return Buffer.from(png);
+}
+
+/** Генерує PNG ранкового дашборду; null якщо рендер не вдався (безпечна обгортка). */
 export async function generateBriefImage(w: WellnessRow, dateLabel: string): Promise<Buffer | null> {
   try {
-    const width = 1080;
-    const height = canvasHeight(w);
-    const markup = html(buildHtml(w, dateLabel));
-    const svg = await satori(markup as Parameters<typeof satori>[0], { width, height, fonts: fonts() });
-    const png = new Resvg(svg, { fitTo: { mode: 'width', value: width } }).render().asPng();
-    return Buffer.from(png);
+    return await renderBriefImage(w, dateLabel);
   } catch (e) {
     console.error('generateBriefImage failed:', e instanceof Error ? e.message : e);
     return null;

@@ -1,5 +1,8 @@
-import { Bot, InlineKeyboard } from 'grammy';
+import { Bot, InlineKeyboard, InputFile } from 'grammy';
 import { ownerGuard } from './guard.js';
+import { kyivNow } from '../utils/kyiv.js';
+import { wellnessFor } from '../services/training/garmin.js';
+import { renderBriefImage } from '../services/brief/image.js';
 import { runAgent } from '../ai/agent.js';
 import { saveMessage } from '../ai/claude.js';
 import { transcribeAudio } from '../transcription/whisper.js';
@@ -420,8 +423,23 @@ export function createBot(token: string) {
   });
 
   // ─── /brief — ранковий бриф на вимогу (для тесту, поза розкладом 8:00) ──
+  // Спершу тягнемо свіжі дані Garmin (як і ранковий бриф), щоб була картинка.
   bot.command('brief', async (ctx) => {
+    try { await runGarminSync(); } catch { /* без синку — бриф піде з наявними даними */ }
     await sendMorningBrief(ctx.api, ctx.chat.id);
+  });
+
+  // ─── /brief_debug — чому не вийшла картинка (тимчасова діагностика) ──
+  bot.command('brief_debug', async (ctx) => {
+    const { date } = kyivNow();
+    const w = await wellnessFor(date);
+    if (!w) { await ctx.reply(`Немає даних garmin_wellness за ${date}. Спершу /garmin_sync.`); return; }
+    try {
+      const png = await renderBriefImage(w, date);
+      await ctx.replyWithPhoto(new InputFile(png, 'brief.png'), { caption: `OK: ${png.length} байт` });
+    } catch (e) {
+      await ctx.reply(`❌ Рендер картинки впав:\n${(e instanceof Error ? (e.stack || e.message) : String(e)).slice(0, 800)}`);
+    }
   });
 
   // ─── /garmin_sync — ручний запуск синку (сон/HRV/body battery + силові сети) ──
