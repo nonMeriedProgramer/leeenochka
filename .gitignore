@@ -7,3 +7,4 @@ data/
 *.mp3
 *.ogg
 brief.png
+__pycache__/

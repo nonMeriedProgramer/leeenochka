@@ -5,7 +5,7 @@ import { isCalendarConnected, getUpcomingEvents } from '../calendar/index.js';
 import { kyivWeekStart, nextWeekStart, closePastWeeks, ensureWeekSeeded } from '../plan/index.js';
 import { pendingGarminActivities, markGarminProcessed, proposalsFromActivity } from '../training/garmin.js';
 import { sendMorningBrief } from '../brief/index.js';
-import { runGarminSync } from '../training/garminSync.js';
+import { syncWellnessFromIntervals } from '../training/intervals.js';
 import { postNewTrainings, trainingPostsEnabled } from '../training/eveningPost.js';
 import { kyivNow, timeKyiv } from '../../utils/kyiv.js';
 
@@ -42,7 +42,7 @@ async function maybeMorningBrief(bot: Bot) {
   lastBriefDate = date;
 
   // Спершу підтягуємо свіжі дані з Garmin, щоб бриф уже мав сон/body battery за ніч.
-  try { await runGarminSync(); } catch { /* синк не вдався — шлемо бриф без wellness */ }
+  try { await syncWellnessFromIntervals(); } catch { /* синк не вдався — шлемо бриф без wellness */ }
 
   try {
     await sendMorningBrief(bot.api, owner);

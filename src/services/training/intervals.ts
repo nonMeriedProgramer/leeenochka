@@ -1,13 +1,16 @@
-// ─── intervals.icu → текст поста для каналу «gym table» ─────────────
+// ─── intervals.icu → канал «gym table» + wellness для брифу + MCP ──────────
 // Garmin синхронізується в intervals.icu офіційно (партнерська інтеграція),
 // тож тут ні логіну в Garmin, ні 429. Звідси беремо список активностей за
 // API-ключем і оригінальний FIT-файл: у ньому силові підходи (вага, повтори,
 // тривалість, відпочинок), яких intervals.icu у своєму API не віддає.
-// Модуль свідомо без БД — пости можна перевірити локально
-// (tools/test-training-post.ts). Публікація й анти-дублі — eveningPost.ts.
+// Той самий API-ключ дає і wellness (сон/HRV/RHR/кроки) — syncWellnessFromIntervals
+// пише його в garmin_wellness для ранкового брифу й health_today. Формати постів
+// без БД, можна перевірити локально (tools/test-training-post.ts). Публікація
+// в канал і анти-дублі — eveningPost.ts.
 
 import { gunzipSync } from 'node:zlib';
 import { Decoder, Profile, Stream } from '@garmin/fitsdk';
+import db from '../../db/index.js';
 import { BODYWEIGHT_CATEGORIES, camelToUpperSnake, exerciseDisplayName } from './exerciseNames.js';
 
 const API = 'https://intervals.icu/api/v1';
@@ -48,6 +51,12 @@ const RIDE = new Set(['Ride', 'GravelRide', 'MountainBikeRide', 'VirtualRide', '
 
 export function intervalsConfigured(): boolean {
   return !!process.env.INTERVALS_API_KEY;
+}
+
+function shiftDate(date: string, days: number): string {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 function headers(): Record<string, string> {
@@ -95,6 +104,45 @@ export async function fetchWellness(oldest: string, newest: string): Promise<Icu
   if (res.status === 401) throw new Error('intervals.icu 401: невірний або перевипущений API-ключ');
   if (!res.ok) throw new Error(`intervals.icu ${res.status}: ${(await res.text()).slice(0, 200)}`);
   return (await res.json()) as IcuWellness[];
+}
+
+// Колонки garmin_wellness — INTEGER, а Intervals може віддати дробове значення.
+const int = (v: number | null | undefined) => (v == null ? null : Math.round(v));
+
+/**
+ * Тягне wellness за останні 3 дні з intervals.icu і upsert-ить у garmin_wellness —
+ * той самий шлях, що вже читають бриф, картинка й health_today. Garmin не ділиться
+ * Body Battery й Training Readiness зі сторонніми сервісами, тому ці поля лишаються
+ * null (readiness — тільки якщо сам intervals.icu його порахує).
+ */
+export async function syncWellnessFromIntervals(): Promise<string> {
+  if (!intervalsConfigured()) {
+    throw new Error('Не задано INTERVALS_API_KEY (Intervals.icu → Settings → Developer Settings).');
+  }
+  const newest = new Date().toISOString().slice(0, 10);
+  const oldest = shiftDate(newest, -2);
+  const days = await fetchWellness(oldest, newest);
+
+  let written = 0;
+  for (const w of days) {
+    if (!w?.id) continue;
+    const sleepHours = w.sleepSecs ? Math.round((w.sleepSecs / 3600) * 10) / 10 : null;
+    await db.run(
+      `INSERT INTO garmin_wellness
+         (date, resting_hr, hrv_ms, sleep_hours, sleep_score, stress_avg, steps, training_readiness, raw, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb, now())
+       ON CONFLICT (date) DO UPDATE SET
+         resting_hr = EXCLUDED.resting_hr, hrv_ms = EXCLUDED.hrv_ms,
+         sleep_hours = EXCLUDED.sleep_hours, sleep_score = EXCLUDED.sleep_score,
+         stress_avg = EXCLUDED.stress_avg, steps = EXCLUDED.steps,
+         training_readiness = EXCLUDED.training_readiness,
+         raw = EXCLUDED.raw, updated_at = now()`,
+      [w.id, int(w.restingHR), int(w.hrv), sleepHours,
+        int(w.sleepScore), int(w.stress), int(w.steps), int(w.readiness), JSON.stringify(w)],
+    );
+    written++;
+  }
+  return `Intervals.icu: оновлено днів — ${written} (${oldest}…${newest}).`;
 }
 
 async function fetchOriginalFit(activityId: string): Promise<Buffer | null> {
@@ -334,22 +382,21 @@ export function formatGym(date: string, hashtag: string, fit: FitInfo, a: IcuAct
 }
 
 /**
- * Будує пост для однієї активності. Для не-біг/не-вело качає оригінальний FIT:
- * лише так можна відрізнити залу від боксу (в intervals.icu немає типу «бокс»,
- * він приходить як Workout/Other) і дістати підходи.
- */
-/**
  * Посилання на все тренування — щоб узяти з каналу й вставити в чат Клода
  * (через MCP get_activity бере повну картку, включно з підходами зали).
  * Точний шлях на intervals.icu ніде офіційно не задокументований, але це не
- * критично: id читаємо самі з кінця рядка (activityIdFromInput нижче), тож
- * навіть якщо посилання колись не відкриється в браузері, вставлений текст
- * усе одно спрацює.
+ * критично: id читаємо самі з кінця рядка (у mcp/server.ts), тож навіть якщо
+ * посилання колись не відкриється в браузері, вставлений текст усе одно спрацює.
  */
 function activityLink(id: string): string {
   return `https://intervals.icu/activities/${id}`;
 }
 
+/**
+ * Будує пост для однієї активності. Для не-біг/не-вело качає оригінальний FIT:
+ * лише так можна відрізнити залу від боксу (в intervals.icu немає типу «бокс»,
+ * він приходить як Workout/Other) і дістати підходи.
+ */
 export async function buildTrainingPost(a: IcuActivity, gymHashtag = '#зал'): Promise<TrainingPost> {
   const date = (a.start_date_local ?? '').slice(0, 10) || new Date().toISOString().slice(0, 10);
   const type = a.type ?? '';

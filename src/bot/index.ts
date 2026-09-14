@@ -21,8 +21,9 @@ import {
   dayIndexInSchedule, resolveDay, renderSession, cycleStart, startCycle,
 } from '../services/training/index.js';
 import { sendMorningBrief } from '../services/brief/index.js';
-import { runGarminSync } from '../services/training/garminSync.js';
-import { buildTrainingPost, fetchActivities, intervalsConfigured } from '../services/training/intervals.js';
+import {
+  syncWellnessFromIntervals, buildTrainingPost, fetchActivities, intervalsConfigured,
+} from '../services/training/intervals.js';
 import { postNewTrainings, trainingPostsEnabled } from '../services/training/eveningPost.js';
 
 // Очікувані дії (бот однокористувацький — owner-only, module-level стан ок)
@@ -425,9 +426,9 @@ export function createBot(token: string) {
   });
 
   // ─── /brief — ранковий бриф на вимогу (для тесту, поза розкладом 8:00) ──
-  // Спершу тягнемо свіжі дані Garmin (як і ранковий бриф), щоб була картинка.
+  // Спершу тягнемо свіжі дані (як і ранковий бриф), щоб була картинка.
   bot.command('brief', async (ctx) => {
-    try { await runGarminSync(); } catch { /* без синку — бриф піде з наявними даними */ }
+    try { await syncWellnessFromIntervals(); } catch { /* без синку — бриф піде з наявними даними */ }
     await sendMorningBrief(ctx.api, ctx.chat.id);
   });
 
@@ -444,16 +445,14 @@ export function createBot(token: string) {
     }
   });
 
-  // ─── /garmin_sync — ручний запуск синку (сон/HRV/body battery + силові сети) ──
+  // ─── /garmin_sync — ручний запуск синку wellness (через Intervals.icu) ──
   // Той самий синк, що автоматично йде перед ранковим брифом (див. scheduler).
   bot.command('garmin_sync', async (ctx) => {
-    await ctx.reply('⏳ Тягну дані з Garmin (сон, HRV, body battery, силові сети)...');
+    await ctx.reply('⏳ Тягну дані Garmin через Intervals.icu (сон, HRV, пульс, кроки, стрес)...');
     try {
-      const tail = (await runGarminSync()).split('\n').slice(-20).join('\n');
-      await ctx.reply(`✅ Готово:\n${tail || '(без виводу)'}`);
+      await ctx.reply(`✅ ${await syncWellnessFromIntervals()}`);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      await ctx.reply(`❌ Помилка синку Garmin:\n${msg.slice(-1500)}`);
+      await ctx.reply(`❌ Помилка синку:\n${(e instanceof Error ? e.message : String(e)).slice(0, 800)}`);
     }
   });
 
