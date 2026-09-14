@@ -67,16 +67,80 @@ def _prompt_mfa() -> str:
     return input("Garmin 2FA code: ").strip()
 
 
+# ── token persistence in Postgres ────────────────────────────────────────────
+# Garmin rotates tokens as they get refreshed. GARMIN_TOKEN_B64 lives in the host's
+# env and can't be updated by this script, so reusing it forever eventually fails
+# ("Failed to retrieve social profile"). Instead, the latest tokens are written to
+# garmin_auth after every run and preferred over the env var on the next one.
+def _db():
+    dsn = os.getenv("DATABASE_URL")
+    if not dsn:
+        return None
+    try:
+        import psycopg2
+        conn = psycopg2.connect(dsn)
+        with conn, conn.cursor() as cur:
+            cur.execute("CREATE TABLE IF NOT EXISTS garmin_auth (id INTEGER PRIMARY KEY, tokens TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())")
+            cur.execute("ALTER TABLE garmin_auth ENABLE ROW LEVEL SECURITY")
+        return conn
+    except Exception as e:  # noqa: BLE001
+        print(f"[auth] DB unavailable for token storage: {e}")
+        return None
+
+
+def load_saved_tokens():
+    conn = _db()
+    if not conn:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT tokens FROM garmin_auth WHERE id = 1")
+            row = cur.fetchone()
+            return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def save_tokens(garmin: "Garmin") -> None:
+    conn = _db()
+    if not conn:
+        return
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO garmin_auth (id, tokens, updated_at) VALUES (1, %s, now())
+                   ON CONFLICT (id) DO UPDATE SET tokens = EXCLUDED.tokens, updated_at = now()""",
+                (garmin.client.dumps(),),
+            )
+    finally:
+        conn.close()
+
+
 def authenticate(force_login: bool) -> "Garmin":
     token_b64 = os.getenv("GARMIN_TOKEN_B64")
 
-    if token_b64 and not force_login:
-        garmin = Garmin()
+    if not force_login:
+        # 1) latest rotated tokens from DB, 2) the env bundle as a bootstrap.
         # .login(<token string>) (not .client.loads) — login() also fetches the profile
-        # afterwards and sets garmin.display_name, which get_user_summary/get_sleep_data
-        # need internally. Loading tokens directly via .client.loads() skips that step.
-        garmin.login(base64.b64decode(token_b64).decode("utf-8"))
-        return garmin
+        # and sets garmin.display_name, which get_user_summary/get_sleep_data need.
+        candidates = [("db", load_saved_tokens())]
+        if token_b64:
+            candidates.append(("env", base64.b64decode(token_b64).decode("utf-8")))
+        last_err = None
+        for source, tokens in candidates:
+            if not tokens:
+                continue
+            try:
+                garmin = Garmin()
+                garmin.login(tokens)
+                save_tokens(garmin)
+                return garmin
+            except Exception as e:  # noqa: BLE001 — try the next source
+                print(f"[auth] tokens from {source} rejected: {e}")
+                last_err = e
+        if last_err and not os.path.exists(TOKENSTORE):
+            sys.exit("Saved Garmin tokens are expired. Run `python tools/garmin_sync.py --login` locally "
+                     "and put the new bundle into GARMIN_TOKEN_B64.")
 
     if not force_login:
         try:
@@ -293,6 +357,7 @@ def main() -> None:
 
     if args.login:
         garmin.client.dump(TOKENSTORE)
+        save_tokens(garmin)  # no-op without DATABASE_URL
         bundle = base64.b64encode(garmin.client.dumps().encode("utf-8")).decode("utf-8")
         print("\nLogin OK. Token saved to", TOKENSTORE)
         print("\nFor a scheduled/headless run, save this as GARMIN_TOKEN_B64:\n")
@@ -320,6 +385,9 @@ def main() -> None:
         print("(No strength_training activities in this window.)")
 
     sink_wellness_postgres(wellness)
+
+    # Tokens may have been refreshed during the API calls above — keep the newest.
+    save_tokens(garmin)
 
 
 if __name__ == "__main__":
