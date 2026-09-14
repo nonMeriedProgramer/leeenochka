@@ -145,6 +145,16 @@ export async function initDb(): Promise<void> {
     );
     ALTER TABLE garmin_wellness ADD COLUMN IF NOT EXISTS body_battery_current INTEGER;
 
+    -- Які тренування з intervals.icu вже опубліковано в канал «gym table» (анти-дублі).
+    -- status: posted | skipped_manual (залу того дня вже запостили вручну через бота)
+    CREATE TABLE IF NOT EXISTS training_posts (
+      activity_id   TEXT PRIMARY KEY,
+      activity_date DATE,
+      kind          TEXT,
+      status        TEXT NOT NULL DEFAULT 'posted',
+      posted_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     -- Закриваємо таблиці від публічного REST API Supabase (anon-ключ).
     -- Бот — власник таблиць (роль postgres) — RLS обходить, тож працює як і раніше.
     ALTER TABLE memories          ENABLE ROW LEVEL SECURITY;
@@ -159,6 +169,7 @@ export async function initDb(): Promise<void> {
     ALTER TABLE garmin_activities ENABLE ROW LEVEL SECURITY;
     ALTER TABLE gym_schedule      ENABLE ROW LEVEL SECURITY;
     ALTER TABLE garmin_wellness   ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE training_posts    ENABLE ROW LEVEL SECURITY;
   `);
   console.log('✅ DB ready (Postgres)');
 }

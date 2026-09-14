@@ -22,6 +22,8 @@ import {
 } from '../services/training/index.js';
 import { sendMorningBrief } from '../services/brief/index.js';
 import { runGarminSync } from '../services/training/garminSync.js';
+import { buildTrainingPost, fetchActivities, intervalsConfigured } from '../services/training/intervals.js';
+import { postNewTrainings, trainingPostsEnabled } from '../services/training/eveningPost.js';
 
 // Очікувані дії (бот однокористувацький — owner-only, module-level стан ок)
 let pendingAction: { execute: () => Promise<string> } | null = null;     // ✅/❌ підтвердження
@@ -452,6 +454,47 @@ export function createBot(token: string) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       await ctx.reply(`❌ Помилка синку Garmin:\n${msg.slice(-1500)}`);
+    }
+  });
+
+  // ─── /mcp_url — адреса для claude.ai (Customize → Connectors → +) ──────
+  // Секрет тільки тут, у приваті, а не в логах Render чи в репо.
+  bot.command('mcp_url', async (ctx) => {
+    const secret = process.env.MCP_SECRET;
+    const appUrl = process.env.RENDER_EXTERNAL_URL ?? process.env.APP_URL;
+    if (!secret) { await ctx.reply('MCP_SECRET не задано в змінних середовища.'); return; }
+    if (!appUrl) { await ctx.reply('Немає публічної адреси (RENDER_EXTERNAL_URL/APP_URL) — локально MCP через claude.ai не спрацює.'); return; }
+    await ctx.reply(`${appUrl}/mcp/${secret}\n\nCustomize → Connectors → + → Add custom connector, вставити цей URL. Нікому не пересилай — хто має адресу, той бачить твої тренування.`);
+  });
+
+  // ─── /training_preview — пост останнього тренування лише тобі (канал не чіпає) ──
+  bot.command('training_preview', async (ctx) => {
+    if (!intervalsConfigured()) { await ctx.reply('Немає INTERVALS_API_KEY у змінних середовища.'); return; }
+    try {
+      const { date } = kyivNow();
+      const from = new Date(`${date}T12:00:00Z`);
+      from.setUTCDate(from.getUTCDate() - 30);
+      const [latest] = await fetchActivities(from.toISOString().slice(0, 10), date);
+      if (!latest) { await ctx.reply('За 30 днів в intervals.icu немає тренувань. Перевір, що Garmin підключений і «Скачать активность» увімкнено.'); return; }
+      const post = await buildTrainingPost(latest);
+      await ctx.reply(`👀 Прев'ю (${post.kind}, id ${post.activityId}):\n\n${post.text}`, { parse_mode: 'HTML' });
+    } catch (e) {
+      await ctx.reply(`❌ ${(e instanceof Error ? e.message : String(e)).slice(0, 800)}`);
+    }
+  });
+
+  // ─── /training_post — опублікувати в канал зараз (те саме, що о 21:00) ──
+  bot.command('training_post', async (ctx) => {
+    if (!trainingPostsEnabled()) { await ctx.reply('Потрібні INTERVALS_API_KEY і GYM_CHANNEL_ID.'); return; }
+    try {
+      const { posted, skipped } = await postNewTrainings(ctx.api, 1);
+      const lines = [
+        posted.length ? `✅ Опубліковано: ${posted.map((p) => `${p.date} ${p.kind}`).join(', ')}` : 'Нових тренувань за сьогодні/учора немає.',
+        ...skipped.map((s) => `↪️ ${s}`),
+      ];
+      await ctx.reply(lines.join('\n'));
+    } catch (e) {
+      await ctx.reply(`❌ ${(e instanceof Error ? e.message : String(e)).slice(0, 800)}`);
     }
   });
 

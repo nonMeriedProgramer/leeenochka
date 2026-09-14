@@ -8,7 +8,7 @@
 import { Api } from 'grammy';
 import { todaySession } from './index.js';
 
-function hashtagForDay(dayNumber: 1 | 2 | 3): string {
+export function hashtagForDay(dayNumber: 1 | 2 | 3): string {
   return dayNumber === 1 ? '#груди' : dayNumber === 2 ? '#спина' : '#fullbody';
 }
 

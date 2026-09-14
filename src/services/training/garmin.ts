@@ -4,11 +4,12 @@
 // перетворюємо їх на пропозиції для бота: людина підтверджує — тоді запис
 // іде в training_logs. Ніякого автозапису без підтвердження (Garmin іноді
 // плутає вправу або не бачить вагу).
+// У канал звідси НЕ постимо: пост зали йде автоматично о 21:00 з intervals.icu
+// (див. eveningPost.ts), інакше та сама сесія з'явилась би в каналі двічі.
 
 import db from '../../db/index.js';
-import { MAIN_EXERCISES, type MainKey } from './program.js';
+import { exerciseDisplayName } from './exerciseNames.js';
 import { logWorkout } from './index.js';
-import { postWorkoutToChannel } from './channel.js';
 
 interface GarminSetGroup {
   category: string;
@@ -23,34 +24,6 @@ interface GarminActivityRow {
   type: string | null;
   name: string | null;
   parsed: GarminSetGroup[] | null;
-}
-
-// Категорія (+ підвправа, коли треба розрізнити варіант) → наша головна вправа.
-// PULL_UP охоплює як турнік, так і верхній блок у каталозі Garmin — обидва
-// рахуємо як pulldown, бо це один пункт нашої програми.
-function toMainKey(category: string, name: string | null): MainKey | null {
-  const n = (name ?? '').toUpperCase();
-  switch (category) {
-    case 'BENCH_PRESS': return n.includes('INCLINE') ? 'incline' : 'bench';
-    case 'SHOULDER_PRESS': return 'ohp';
-    case 'PULL_UP': return 'pulldown';
-    case 'ROW': return (n.includes('DUMBBELL') || n.includes('ONE_ARM')) ? 'dbrow' : null;
-    default: return null;
-  }
-}
-
-const ACCESSORY_NAMES: Record<string, string> = {
-  LATERAL_RAISE: 'Розводка на плечі', TRICEPS_EXTENSION: 'Розгинання на трицепс',
-  CURL: 'Підйом на біцепс', SHRUG: 'Шраги', FLYE: 'Розведення (флай)',
-  CALF_RAISE: 'Литки', LEG_CURL: 'Розгинання/згинання ніг', SQUAT: 'Присід',
-  LUNGE: 'Випади', DEADLIFT: 'Тяга (станова — увага, поза програмою)',
-  PLANK: 'Планка', CRUNCH: 'Прес', SIT_UP: 'Прес', CORE: 'Кор',
-  PUSH_UP: 'Віджимання', HYPEREXTENSION: 'Гіперекстензія',
-};
-
-function humanize(category: string): string {
-  return ACCESSORY_NAMES[category]
-    ?? category.split('_').map((w) => w[0] + w.slice(1).toLowerCase()).join(' ');
 }
 
 export interface GarminProposal { label: string; create: () => Promise<string>; }
@@ -126,8 +99,7 @@ export function proposalsFromActivity(row: GarminActivityRow): GarminProposal[] 
   return groups
     .filter((g) => g.reps.length > 0)
     .map((g) => {
-      const key = toMainKey(g.category, g.name);
-      const exerciseName = key ? MAIN_EXERCISES[key] : humanize(g.category);
+      const exerciseName = exerciseDisplayName(g.category, g.name);
       const weightStr = g.weight_kg != null ? `${g.weight_kg} кг` : 'без ваги';
       const label = `${exerciseName}: ${weightStr} × ${g.reps.join(',')}`;
       return {
@@ -137,7 +109,6 @@ export function proposalsFromActivity(row: GarminActivityRow): GarminProposal[] 
             exercise: exerciseName, weight: g.weight_kg, reps: g.reps,
             source: 'garmin', garminActivityId: row.garmin_id, date,
           });
-          postWorkoutToChannel([{ exercise: exerciseName, weight: g.weight_kg, reps: g.reps }], '⌚').catch(() => {});
           return `⌚ ${label}`;
         },
       };

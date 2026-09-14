@@ -6,6 +6,7 @@ import { kyivWeekStart, nextWeekStart, closePastWeeks, ensureWeekSeeded } from '
 import { pendingGarminActivities, markGarminProcessed, proposalsFromActivity } from '../training/garmin.js';
 import { sendMorningBrief } from '../brief/index.js';
 import { runGarminSync } from '../training/garminSync.js';
+import { postNewTrainings, trainingPostsEnabled } from '../training/eveningPost.js';
 import { kyivNow, timeKyiv } from '../../utils/kyiv.js';
 
 const TICK_MS = 30_000; // перевірка кожні 30с
@@ -131,6 +132,25 @@ async function maybeProposeGarminSets(bot: Bot) {
   }
 }
 
+// ─── Автопост тренувань дня в «gym table» — раз на день, вікно 21:00–21:05 ──
+// Помилку (напр. протух ключ intervals.icu) шлемо власнику в приват, не в канал,
+// інакше фіча мовчки перестала б працювати.
+let lastTrainingPostDate = '';
+async function maybeEveningTrainingPost(bot: Bot) {
+  if (!trainingPostsEnabled()) return;
+  const { hour, minute, date } = kyivNow();
+  if (hour !== 21 || minute > 5 || lastTrainingPostDate === date) return;
+  lastTrainingPostDate = date;
+  try {
+    await postNewTrainings(bot.api, 1);
+  } catch (e) {
+    const owner = ownerId();
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('evening training post failed:', msg);
+    if (owner) await bot.api.sendMessage(owner, `⚠️ Автопост тренувань не вийшов:\n${msg.slice(0, 500)}`).catch(() => {});
+  }
+}
+
 // Ролл тижня — ідемпотентно щотіку: зафіксувати минулі тижні (знімок) + засіяти повтори
 async function rollWeek() {
   const ws = kyivWeekStart();
@@ -148,6 +168,7 @@ export function startScheduler(bot: Bot) {
     try { await maybeWeeklyReport(bot); } catch { /* ignore */ }
     try { await maybePlanPrompt(bot); } catch { /* ignore */ }
     try { await maybeProposeGarminSets(bot); } catch { /* ignore */ }
+    try { await maybeEveningTrainingPost(bot); } catch { /* ignore */ }
   };
   setInterval(tick, TICK_MS);
   console.log('⏰ Scheduler started (reminders + calendar + brief + plan)');

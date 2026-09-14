@@ -2,6 +2,7 @@ import http from 'http';
 import type { Bot } from 'grammy';
 import { webhookCallback } from 'grammy';
 import { getDashboardData, renderDashboardHtml } from '../web/dashboard.js';
+import { handleMcpRequest } from '../mcp/server.js';
 
 export function startServer(bot: Bot, port = 3001, secretToken?: string): http.Server {
   const handleUpdate = webhookCallback(bot, 'http', {
@@ -15,6 +16,12 @@ export function startServer(bot: Bot, port = 3001, secretToken?: string): http.S
       await handleUpdate(req, res);
       return;
     }
+
+    // MCP для claude.ai: непередбачувана адреса замість токена (claude.ai custom
+    // connector не має поля для заголовка/секрету — тільки URL), тому доступ
+    // дає сам факт знання повного шляху /mcp/<MCP_SECRET>. Не наш шлях → false,
+    // і виконання йде далі за звичними маршрутами.
+    if (req.url?.startsWith('/mcp/') && (await handleMcpRequest(req, res))) return;
 
     if (req.method === 'GET' && req.url?.startsWith('/dashboard')) {
       // Особисті тренувальні дані — без токена сторінка не віддається.
