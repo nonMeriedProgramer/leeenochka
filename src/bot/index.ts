@@ -451,7 +451,7 @@ export function createBot(token: string) {
       await ctx.reply(`✅ Готово:\n${tail || '(без виводу)'}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      await ctx.reply(`❌ Помилка синку Garmin:\n${msg.slice(0, 500)}`);
+      await ctx.reply(`❌ Помилка синку Garmin:\n${msg.slice(-1500)}`);
     }
   });
 
