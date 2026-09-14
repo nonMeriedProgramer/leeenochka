@@ -24,7 +24,7 @@ import { sendMorningBrief } from '../services/brief/index.js';
 import {
   syncWellnessFromIntervals, buildTrainingPost, fetchActivities, intervalsConfigured,
 } from '../services/training/intervals.js';
-import { postNewTrainings, trainingPostsEnabled } from '../services/training/eveningPost.js';
+import { postNewTrainings, postLastN, trainingPostsEnabled } from '../services/training/eveningPost.js';
 
 // Очікувані дії (бот однокористувацький — owner-only, module-level стан ок)
 let pendingAction: { execute: () => Promise<string> } | null = null;     // ✅/❌ підтвердження
@@ -489,6 +489,24 @@ export function createBot(token: string) {
       const { posted, skipped } = await postNewTrainings(ctx.api, 1);
       const lines = [
         posted.length ? `✅ Опубліковано: ${posted.map((p) => `${p.date} ${p.kind}`).join(', ')}` : 'Нових тренувань за сьогодні/учора немає.',
+        ...skipped.map((s) => `↪️ ${s}`),
+      ];
+      await ctx.reply(lines.join('\n'));
+    } catch (e) {
+      await ctx.reply(`❌ ${(e instanceof Error ? e.message : String(e)).slice(0, 800)}`);
+    }
+  });
+
+  // ─── /training_post_last N — останні N тренувань, незалежно від дати ────
+  // На відміну від /training_post (вікно "сьогодні/учора"), тут рахунок:
+  // "останні 2" можуть бути й тижневої давнини, якщо тренувань було мало.
+  bot.command('training_post_last', async (ctx) => {
+    if (!trainingPostsEnabled()) { await ctx.reply('Потрібні INTERVALS_API_KEY і GYM_CHANNEL_ID.'); return; }
+    const n = Math.max(1, Math.min(10, Number(ctx.match) || 2));
+    try {
+      const { posted, skipped } = await postLastN(ctx.api, n);
+      const lines = [
+        posted.length ? `✅ Опубліковано: ${posted.map((p) => `${p.date} ${p.kind}`).join(', ')}` : `Останні ${n} уже опубліковані раніше — нічого нового.`,
         ...skipped.map((s) => `↪️ ${s}`),
       ];
       await ctx.reply(lines.join('\n'));
