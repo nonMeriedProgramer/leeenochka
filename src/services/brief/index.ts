@@ -11,7 +11,7 @@ import { renderDayPanel } from './panelDay.js';
 import { qualifierUa, scoreQualifier, dur } from './ui.js';
 import { weatherIconFor, weatherLabel } from './weather.js';
 import { formLabel } from './stats.js';
-import { GarminAuthError } from '../garmin/client.js';
+import { GarminAuthError, garminConfigured } from '../garmin/client.js';
 
 const WEATHER_EMOJI: Record<string, string> = {
   sun: '☀️', moon: '🌙', sunCloud: '⛅', moonCloud: '☁️', cloud: '☁️', fog: '🌫', drizzle: '🌦', rain: '🌧', snow: '❄️', thunder: '⛈',
@@ -50,7 +50,7 @@ export function briefCaption(d: BriefData): string {
   }
 
   // Мертвий токен — дія потрібна саме від тебе; блок/збій мине сам, не шумимо.
-  if (g.fatal instanceof GarminAuthError) {
+  if (g.fatal instanceof GarminAuthError && garminConfigured()) {
     lines.push('', '⚠️ Garmin відключився — сон і готовність сьогодні з intervals.icu. Потрібен новий логін (login_garmin.py → GARMIN_TOKEN_B64).');
   }
 
