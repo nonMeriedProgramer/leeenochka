@@ -6,43 +6,15 @@
 import { InputFile, InputMediaBuilder, type Api } from 'grammy';
 import { gatherBriefData, type BriefData } from './data.js';
 import { renderSleepPanel } from './panelSleep.js';
-import { renderReadinessPanel, verdictFor, recoveryText } from './panelReadiness.js';
+import { renderReadinessPanel } from './panelReadiness.js';
 import { renderDayPanel } from './panelDay.js';
-import { qualifierUa, scoreQualifier, dur } from './ui.js';
-import { weatherIconFor, weatherLabel } from './weather.js';
-import { formLabel } from './stats.js';
+import { pickGreeting, pickQuote } from './phrases.js';
 import { GarminAuthError, garminConfigured } from '../garmin/client.js';
 
-const WEATHER_EMOJI: Record<string, string> = {
-  sun: '☀️', moon: '🌙', sunCloud: '⛅', moonCloud: '☁️', cloud: '☁️', fog: '🌫', drizzle: '🌦', rain: '🌧', snow: '❄️', thunder: '⛈',
-};
-
-export function briefCaption(d: BriefData): string {
+export async function briefCaption(d: BriefData): Promise<string> {
   const g = d.garmin;
-  const lines = ['☀️ Доброго ранку!', ''];
+  const lines = [await pickGreeting(), '', await pickQuote(), '', '📅 План на сьогодні:'];
 
-  if (g.sleep) {
-    const q = qualifierUa(g.sleep.qualifier ?? scoreQualifier(g.sleep.score)).text.toLowerCase();
-    const need = g.sleep.needMin ? ` · потреба ${dur(g.sleep.needMin * 60)}` : '';
-    lines.push(`😴 Сон ${g.sleep.score ?? '–'} (${q}) · ${dur(g.sleep.totalSec)}${need}`);
-  } else if (d.stats?.sleepScore || d.stats?.sleepHours) {
-    lines.push(`😴 Сон ${d.stats.sleepScore ? Math.round(d.stats.sleepScore.value) : '–'} · ${d.stats.sleepHours ?? '–'} год`);
-  }
-
-  if (g.readiness) {
-    lines.push(`💪 Готовність ${g.readiness.score} — ${verdictFor(g.readiness.score).text.toLowerCase()} · ${recoveryText(g.readiness).toLowerCase()}`);
-  } else if (d.stats?.form != null) {
-    lines.push(`💪 Форма ${d.stats.form > 0 ? '+' : ''}${d.stats.form} (${formLabel(d.stats.form)})`);
-  }
-
-  if (d.weather) {
-    const w = d.weather;
-    const emoji = WEATHER_EMOJI[weatherIconFor(w.day.code, true)] ?? '🌤';
-    const rain = w.day.precipProb != null ? ` · опади ${Math.round(w.day.precipProb)}%` : '';
-    lines.push(`${emoji} ${w.city} ${Math.round(w.day.tMax)}°/${Math.round(w.day.tMin)}°, ${weatherLabel(w.day.code).toLowerCase()}${rain}`);
-  }
-
-  lines.push('', '📅 План на сьогодні:');
   if (d.plan.length) {
     for (const p of d.plan) lines.push(p.kind === 'gym' ? `🏋️ ${p.title}` : `• ${p.time ? `${p.time} ` : ''}${p.title}`);
   } else {
@@ -95,7 +67,7 @@ export async function buildMorningBrief(): Promise<string> {
 
 export async function sendMorningBrief(api: Api, chatId: number): Promise<void> {
   const data = await gatherBriefData();
-  const caption = briefCaption(data);
+  const caption = await briefCaption(data);
   const { panels } = await renderBrief(data);
   try {
     await sendBriefAlbum(api, chatId, panels, caption);

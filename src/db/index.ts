@@ -164,6 +164,15 @@ export async function initDb(): Promise<void> {
       posted_at     TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- Ротація ранкових привітань/цитат у брифі (брief/phrases.ts) — коли кожну
+    -- фразу востаннє показували, щоб не повторювати частіше за вікно кулдауну.
+    CREATE TABLE IF NOT EXISTS brief_phrases (
+      kind    TEXT NOT NULL CHECK (kind IN ('greeting','quote')),
+      text    TEXT NOT NULL,
+      used_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (kind, text)
+    );
+
     -- Закриваємо таблиці від публічного REST API Supabase (anon-ключ).
     -- Бот — власник таблиць (роль postgres) — RLS обходить, тож працює як і раніше.
     ALTER TABLE memories          ENABLE ROW LEVEL SECURITY;
@@ -180,6 +189,7 @@ export async function initDb(): Promise<void> {
     ALTER TABLE garmin_wellness   ENABLE ROW LEVEL SECURITY;
     ALTER TABLE training_posts    ENABLE ROW LEVEL SECURITY;
     ALTER TABLE garmin_auth       ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE brief_phrases     ENABLE ROW LEVEL SECURITY;
   `);
   console.log('✅ DB ready (Postgres)');
 }
