@@ -45,6 +45,8 @@ export function garminConfigured(): boolean {
 let cache: Tokens | null = null;
 let refreshing: Promise<Tokens> | null = null;
 let displayName: string | null = null;
+// Звідки взялися токени — у тексті помилки, щоб бачити, чи на сервері саме той GARMIN_TOKEN_B64.
+let tokenSource = '?';
 
 function valid(t: Partial<Tokens> | null | undefined): t is Tokens {
   return !!(t?.di_token && t.di_refresh_token && t.di_client_id);
@@ -71,6 +73,7 @@ async function loadTokens(): Promise<Tokens> {
   if (file) {
     const t = JSON.parse(readFileSync(file, 'utf8')) as Partial<Tokens>;
     if (!valid(t)) throw new GarminAuthError(`${file}: немає di_token/di_refresh_token/di_client_id`);
+    tokenSource = 'файл';
     return (cache = t);
   }
 
@@ -93,11 +96,13 @@ async function loadTokens(): Promise<Tokens> {
       }
       if (!valid(seed)) throw new GarminAuthError('GARMIN_TOKEN_B64: немає di_token/di_refresh_token/di_client_id');
       await saveTokens(seed, seedHash);
+      tokenSource = `env#${seedHash.slice(0, 8)}`;
       return (cache = seed);
     }
   }
   if (row) {
     const t = JSON.parse(row.tokens) as Partial<Tokens>;
+    tokenSource = `БД, env#${row.seed_hash?.slice(0, 8) ?? '—'}`;
     if (valid(t)) return (cache = t);
   }
   throw new GarminAuthError('Немає токенів Garmin: задай GARMIN_TOKEN_B64');
@@ -116,7 +121,18 @@ function expiresSoon(token: string): boolean {
   return typeof exp === 'number' && Date.now() / 1000 > exp - 900;
 }
 
-async function doRefresh(t: Tokens): Promise<Tokens> {
+const kyivFmt = new Intl.DateTimeFormat('uk-UA', {
+  timeZone: 'Europe/Kyiv', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+});
+
+/** Лише несекретне: джерело, коли видано і до коли діє access-токен. */
+function tokenMeta(t: Tokens): string {
+  const p = jwtPayload(t.di_token);
+  const at = (s: unknown) => (typeof s === 'number' ? kyivFmt.format(new Date(s * 1000)) : '?');
+  return `${tokenSource}, видано ${at(p?.iat)}, діє до ${at(p?.exp)}`;
+}
+
+async function doRefresh(t: Tokens, reason: string): Promise<Tokens> {
   const res = await fetch(DI_TOKEN_URL, {
     method: 'POST',
     headers: {
@@ -136,7 +152,10 @@ async function doRefresh(t: Tokens): Promise<Tokens> {
   const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok || typeof data.access_token !== 'string') {
     // Лише код помилки: error_description у Garmin містить сам refresh-токен.
-    throw new GarminAuthError(`Garmin: токен більше не оновлюється (${res.status} ${String(data.error ?? '')}) — потрібен новий логін`);
+    throw new GarminAuthError(
+      `Garmin: токен більше не оновлюється (${res.status} ${String(data.error ?? '')}) — потрібен новий логін`
+      + ` [оновлення через: ${reason}; токен: ${tokenMeta(t)}]`,
+    );
   }
   const clientId = jwtPayload(data.access_token)?.client_id;
   const next: Tokens = {
@@ -153,29 +172,52 @@ async function doRefresh(t: Tokens): Promise<Tokens> {
  * Одне оновлення на всіх: refresh-токен ротується, тож два паралельні оновлення
  * тим самим токеном — друге отримало б invalid_grant і вбило б весь ланцюжок.
  */
-function refresh(t: Tokens): Promise<Tokens> {
-  refreshing ??= doRefresh(t).finally(() => { refreshing = null; });
+function refresh(t: Tokens, reason: string): Promise<Tokens> {
+  refreshing ??= doRefresh(t, reason).finally(() => { refreshing = null; });
   return refreshing;
 }
 
 // ─── Запити ────────────────────────────────────────────────────────────
+function bearerGet(url: URL, t: Tokens): Promise<Response> {
+  return fetch(url, {
+    headers: { ...NATIVE_HEADERS, Authorization: `Bearer ${t.di_token}`, Accept: 'application/json' },
+  });
+}
+
 export async function garminGet<T>(path: string, params?: Record<string, string | number>): Promise<T> {
   let t = await loadTokens();
   if (refreshing) t = await refreshing;
-  else if (expiresSoon(t.di_token)) t = await refresh(t);
+  else if (expiresSoon(t.di_token)) t = await refresh(t, 'строк access-токена вийшов');
 
   const url = new URL(CONNECT_API + path);
   for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, String(v));
-  const call = (tok: Tokens) => fetch(url, {
-    headers: { ...NATIVE_HEADERS, Authorization: `Bearer ${tok.di_token}`, Accept: 'application/json' },
-  });
 
-  let res = await call(t);
-  if (res.status === 401) res = await call(await refresh(t));
+  let res = await bearerGet(url, t);
+  if (res.status === 401) res = await bearerGet(url, await refresh(t, `401 на ${path}`));
   if (res.status === 429 || res.status === 403) throw new GarminBlockedError(`Garmin: запит відбито (${res.status}) ${path}`);
   if (res.status === 204) return {} as T;
   if (!res.ok) throw new Error(`Garmin ${res.status} ${path}`);
   return (await res.json()) as T;
+}
+
+/**
+ * /garmin_check: запит із поточним токеном, примусове оновлення, запит із новим.
+ * Перевіряє весь ланцюжок саме з цього сервера, а не через добу, коли токен спливе.
+ */
+export async function garminCheck(): Promise<string> {
+  const out: string[] = [];
+  const profile = new URL(`${CONNECT_API}/userprofile-service/socialProfile`);
+  try {
+    let t = await loadTokens();
+    out.push(`Токен: ${tokenMeta(t)}`);
+    out.push(`Запит профілю: HTTP ${(await bearerGet(profile, t)).status}`);
+    t = await refresh(t, 'ручна перевірка');
+    out.push(`Оновлення: ✓ новий діє до ${kyivFmt.format(new Date(Number(jwtPayload(t.di_token)?.exp) * 1000))}`);
+    out.push(`Запит з новим токеном: HTTP ${(await bearerGet(profile, t)).status}`);
+  } catch (e) {
+    out.push(`✗ ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return out.join('\n');
 }
 
 /** UUID профілю — частина шляху для сну й денної статистики. */

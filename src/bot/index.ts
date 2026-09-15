@@ -3,6 +3,7 @@ import { ownerGuard } from './guard.js';
 import { kyivNow } from '../utils/kyiv.js';
 import { gatherBriefData } from '../services/brief/data.js';
 import { renderBrief, sendBriefAlbum, sendMorningBrief } from '../services/brief/index.js';
+import { garminCheck } from '../services/garmin/client.js';
 import { runAgent } from '../ai/agent.js';
 import { saveMessage } from '../ai/claude.js';
 import { transcribeAudio } from '../transcription/whisper.js';
@@ -450,6 +451,11 @@ export function createBot(token: string) {
     } catch (e) {
       await ctx.reply(`❌ brief_debug впав:\n${(e instanceof Error ? (e.stack || e.message) : String(e)).slice(0, 800)}`);
     }
+  });
+
+  // ─── /garmin_check — чи живий токен Garmin і чи оновлюється він із сервера ──
+  bot.command('garmin_check', async (ctx) => {
+    await ctx.reply(`🔧 garmin_check\n${await garminCheck()}`);
   });
 
   // ─── /garmin_sync — ручний запуск синку wellness (через Intervals.icu) ──
