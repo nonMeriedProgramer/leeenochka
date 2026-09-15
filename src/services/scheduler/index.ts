@@ -49,7 +49,7 @@ async function maybeMorningBrief(bot: Bot) {
   const owner = ownerId();
   if (!owner) return;
   const { hour, minute, date } = kyivNow();
-  if (lastBriefDate === date || hour < 4) return; // вночі до сну не перевіряємо
+  if (lastBriefDate === date || hour < 6) return; // вночі до сну не перевіряємо
 
   let shouldSend = false;
   const now = Date.now();
