@@ -10,7 +10,7 @@
 import { kyivNow } from '../../utils/kyiv.js';
 import { fetchWellness, intervalsConfigured, type IcuWellness } from '../training/intervals.js';
 
-function shiftDate(iso: string, days: number): string {
+export function shiftDate(iso: string, days: number): string {
   const d = new Date(`${iso}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
@@ -43,15 +43,18 @@ export interface BriefStats {
 export async function fetchBriefStats(): Promise<BriefStats | null> {
   if (!intervalsConfigured()) return null;
   const today = kyivNow().date;
-  let rows: IcuWellness[];
   try {
-    rows = await fetchWellness(shiftDate(today, -30), today);
+    return computeBriefStats(await fetchWellness(shiftDate(today, -30), today), today);
   } catch (e) {
     console.error('fetchBriefStats: intervals.icu wellness failed:', e instanceof Error ? e.message : e);
     return null;
   }
-  if (!rows.length) return null;
-  rows.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** Та сама статистика з уже завантажених рядків (без повторного запиту). */
+export function computeBriefStats(input: IcuWellness[], today: string): BriefStats | null {
+  if (!input.length) return null;
+  const rows = [...input].sort((a, b) => a.id.localeCompare(b.id));
 
   // О 8 ранку сьогоднішній рядок може ще не встигнути прийти (сон синкається
   // після пробудження) — тоді беремо останній наявний, а не показуємо пустку.

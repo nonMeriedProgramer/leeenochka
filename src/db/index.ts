@@ -145,6 +145,15 @@ export async function initDb(): Promise<void> {
     );
     ALTER TABLE garmin_wellness ADD COLUMN IF NOT EXISTS body_battery_current INTEGER;
 
+    -- Ротовані DI-токени Garmin (services/garmin/client.ts). seed_hash — хеш
+    -- GARMIN_TOKEN_B64, з якого їх засіяли: новий env після релогіну перемагає.
+    CREATE TABLE IF NOT EXISTS garmin_auth (
+      id         INTEGER PRIMARY KEY,
+      tokens     TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    ALTER TABLE garmin_auth ADD COLUMN IF NOT EXISTS seed_hash TEXT;
+
     -- Які тренування з intervals.icu вже опубліковано в канал «gym table» (анти-дублі).
     -- status: posted | skipped_manual (залу того дня вже запостили вручну через бота)
     CREATE TABLE IF NOT EXISTS training_posts (
@@ -170,6 +179,7 @@ export async function initDb(): Promise<void> {
     ALTER TABLE gym_schedule      ENABLE ROW LEVEL SECURITY;
     ALTER TABLE garmin_wellness   ENABLE ROW LEVEL SECURITY;
     ALTER TABLE training_posts    ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE garmin_auth       ENABLE ROW LEVEL SECURITY;
   `);
   console.log('✅ DB ready (Postgres)');
 }

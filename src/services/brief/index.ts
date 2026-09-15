@@ -1,97 +1,106 @@
-import { InputFile, type Api } from 'grammy';
-import { isCalendarConnected, getUpcomingEvents } from '../calendar/index.js';
-import { todaySession } from '../training/index.js';
-import { kyivNow, timeKyiv } from '../../utils/kyiv.js';
-import { generateBriefImage } from './image.js';
-import { fetchBriefStats, formLabel, type BriefStats, type Trend } from './stats.js';
+// ─── Ранковий бриф: альбом із 3 панелей + підпис ─────────────────────
+// Сон · Готовність · Сьогодні. Кожна панель рендериться окремо: якщо одна
+// впала, решта все одно йде. Жодної панелі — лише текст. Дані — gatherBriefData
+// (Garmin, intervals.icu, погода, план), кожне джерело теж незалежне.
 
-interface Brief {
-  text: string;
-  stats: BriefStats | null;
-  dateLabel: string;
-}
+import { InputFile, InputMediaBuilder, type Api } from 'grammy';
+import { gatherBriefData, type BriefData } from './data.js';
+import { renderSleepPanel } from './panelSleep.js';
+import { renderReadinessPanel, verdictFor, recoveryText } from './panelReadiness.js';
+import { renderDayPanel } from './panelDay.js';
+import { qualifierUa, scoreQualifier, dur } from './ui.js';
+import { weatherIconFor, weatherLabel } from './weather.js';
+import { formLabel } from './stats.js';
+import { GarminAuthError } from '../garmin/client.js';
 
-/** "82 (↑6 від сер. 30д)" — той самий підхід, що й у картинці, текстом. */
-function fmtTrend(t: Trend | null, unit: string, digits = 0): string {
-  if (!t) return '';
-  const val = digits ? t.value.toFixed(digits) : String(Math.round(t.value));
-  const threshold = digits ? 0.05 : 1;
-  if (t.delta == null || Math.abs(t.delta) < threshold) return `${val}${unit}`;
-  const arrow = t.delta > 0 ? '↑' : '↓';
-  const d = digits ? Math.abs(t.delta).toFixed(digits) : String(Math.abs(Math.round(t.delta)));
-  return `${val}${unit} (${arrow}${d}${unit} від сер. 30д)`;
-}
+const WEATHER_EMOJI: Record<string, string> = {
+  sun: '☀️', moon: '🌙', sunCloud: '⛅', moonCloud: '☁️', cloud: '☁️', fog: '🌫', drizzle: '🌦', rain: '🌧', snow: '❄️', thunder: '⛈',
+};
 
-function wellnessLines(stats: BriefStats | null): string[] {
-  if (!stats) return [];
-  const lines: string[] = [];
-  if (stats.fitness != null && stats.fatigue != null && stats.form != null) {
-    const sign = stats.form > 0 ? '+' : '';
-    lines.push(`💪 Фітнес ${stats.fitness} · Втома ${stats.fatigue} · Форма ${sign}${stats.form} (${formLabel(stats.form)})`);
+export function briefCaption(d: BriefData): string {
+  const g = d.garmin;
+  const lines = ['☀️ Доброго ранку!', ''];
+
+  if (g.sleep) {
+    const q = qualifierUa(g.sleep.qualifier ?? scoreQualifier(g.sleep.score)).text.toLowerCase();
+    const need = g.sleep.needMin ? ` · потреба ${dur(g.sleep.needMin * 60)}` : '';
+    lines.push(`😴 Сон ${g.sleep.score ?? '–'} (${q}) · ${dur(g.sleep.totalSec)}${need}`);
+  } else if (d.stats?.sleepScore || d.stats?.sleepHours) {
+    lines.push(`😴 Сон ${d.stats.sleepScore ? Math.round(d.stats.sleepScore.value) : '–'} · ${d.stats.sleepHours ?? '–'} год`);
   }
-  if (stats.sleepScore) {
-    lines.push(`😴 Сон: ${fmtTrend(stats.sleepScore, '')}${stats.sleepHours != null ? ` · ${stats.sleepHours} год` : ''}`);
-  } else if (stats.sleepHours != null) {
-    lines.push(`😴 Сон: ${stats.sleepHours} год`);
+
+  if (g.readiness) {
+    lines.push(`💪 Готовність ${g.readiness.score} — ${verdictFor(g.readiness.score).text.toLowerCase()} · ${recoveryText(g.readiness).toLowerCase()}`);
+  } else if (d.stats?.form != null) {
+    lines.push(`💪 Форма ${d.stats.form > 0 ? '+' : ''}${d.stats.form} (${formLabel(d.stats.form)})`);
   }
-  if (stats.hrv) lines.push(`❤️ HRV: ${fmtTrend(stats.hrv, ' мс')}`);
-  if (stats.restingHr) lines.push(`🫀 Пульс спокою: ${fmtTrend(stats.restingHr, ' уд/хв')}`);
-  if (stats.stepsYesterday) lines.push(`👟 Кроки (вчора): ${fmtTrend(stats.stepsYesterday, '')}`);
-  if (stats.readiness != null) lines.push(`🎯 Готовність: ${stats.readiness}/100`);
-  return lines;
-}
 
-async function buildBrief(): Promise<Brief> {
-  const todayStr = new Date().toLocaleDateString('uk-UA', { timeZone: 'Europe/Kyiv' });
-  const dateLabel = new Date().toLocaleDateString('uk-UA', {
-    timeZone: 'Europe/Kyiv', weekday: 'long', day: 'numeric', month: 'long',
-  });
-
-  const planItems: string[] = [];
-  if (isCalendarConnected()) {
-    const events = (await getUpcomingEvents(1))
-      .filter(e => e.start && new Date(e.start).toLocaleDateString('uk-UA', { timeZone: 'Europe/Kyiv' }) === todayStr);
-    planItems.push(...events.map(e => `• ${timeKyiv(e.start)} ${e.title}`));
+  if (d.weather) {
+    const w = d.weather;
+    const emoji = WEATHER_EMOJI[weatherIconFor(w.day.code, true)] ?? '🌤';
+    const rain = w.day.precipProb != null ? ` · опади ${Math.round(w.day.precipProb)}%` : '';
+    lines.push(`${emoji} ${w.city} ${Math.round(w.day.tMax)}°/${Math.round(w.day.tMin)}°, ${weatherLabel(w.day.code).toLowerCase()}${rain}`);
   }
-  try {
-    const session = await todaySession();
-    if (session) planItems.push(`🏋️ ${session.day.title} · ${session.day.subtitle}`);
-  } catch { /* без тренування — не критично */ }
-  const planLines = planItems.length ? planItems.join('\n') : 'на сьогодні нічого не заплановано.';
 
-  let stats: BriefStats | null = null;
-  try {
-    stats = await fetchBriefStats();
-  } catch { /* без даних з intervals.icu — бриф іде без них */ }
-  const wLines = wellnessLines(stats);
-  const wellnessBlock = wLines.length ? `\n\n${wLines.join('\n')}` : '';
+  lines.push('', '📅 План на сьогодні:');
+  if (d.plan.length) {
+    for (const p of d.plan) lines.push(p.kind === 'gym' ? `🏋️ ${p.title}` : `• ${p.time ? `${p.time} ` : ''}${p.title}`);
+  } else {
+    lines.push('нічого не заплановано.');
+  }
 
-  const text = `☀️ Доброго ранку!${wellnessBlock}\n\n📅 План на сьогодні:\n${planLines}`;
-  return { text, stats, dateLabel };
+  // Мертвий токен — дія потрібна саме від тебе; блок/збій мине сам, не шумимо.
+  if (g.fatal instanceof GarminAuthError) {
+    lines.push('', '⚠️ Garmin відключився — сон і готовність сьогодні з intervals.icu. Потрібен новий логін (login_garmin.py → GARMIN_TOKEN_B64).');
+  }
+
+  const text = lines.join('\n');
+  return text.length > 1024 ? `${text.slice(0, 1021)}…` : text;
 }
 
-/** Текст ранкового брифу (без картинки) — для швидких місць/тестів. */
-export async function buildMorningBrief(): Promise<string> {
-  return (await buildBrief()).text;
-}
+export interface RenderedBrief { panels: Array<{ name: string; png: Buffer }>; errors: string[] }
 
-/**
- * Надсилає ранковий бриф у чат: якщо є дані intervals.icu і вдалось згенерувати
- * картинку — шле фото з текстом-підписом; інакше просто текст. Картинка не
- * критична: будь-яка помилка генерації тихо відкочується на текстовий варіант.
- */
-export async function sendMorningBrief(api: Api, chatId: number): Promise<void> {
-  const { text, stats, dateLabel } = await buildBrief();
-
-  if (stats) {
-    const png = await generateBriefImage(stats, dateLabel);
-    if (png) {
-      try {
-        await api.sendPhoto(chatId, new InputFile(png, 'brief.png'), { caption: text });
-        return;
-      } catch { /* фото не пройшло — шлемо текст нижче */ }
+export async function renderBrief(d: BriefData): Promise<RenderedBrief> {
+  const errors: string[] = [];
+  const jobs: Array<[string, (x: BriefData) => Promise<Buffer>]> = [
+    ['сон', renderSleepPanel], ['готовність', renderReadinessPanel], ['сьогодні', renderDayPanel],
+  ];
+  const panels: RenderedBrief['panels'] = [];
+  for (const [name, fn] of jobs) {
+    try {
+      panels.push({ name, png: await fn(d) });
+    } catch (e) {
+      console.error(`brief panel ${name} failed:`, e);
+      errors.push(`панель «${name}»: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
+  return { panels, errors };
+}
 
-  await api.sendMessage(chatId, text);
+export async function sendBriefAlbum(api: Api, chatId: number, panels: RenderedBrief['panels'], caption: string): Promise<void> {
+  if (panels.length >= 2) {
+    const media = panels.map((p, i) => InputMediaBuilder.photo(new InputFile(p.png, `brief-${i + 1}.png`), i === 0 ? { caption } : {}));
+    await api.sendMediaGroup(chatId, media);
+  } else if (panels.length === 1) {
+    await api.sendPhoto(chatId, new InputFile(panels[0].png, 'brief.png'), { caption });
+  } else {
+    await api.sendMessage(chatId, caption);
+  }
+}
+
+/** Текст ранкового брифу (без картинок). */
+export async function buildMorningBrief(): Promise<string> {
+  return briefCaption(await gatherBriefData());
+}
+
+export async function sendMorningBrief(api: Api, chatId: number): Promise<void> {
+  const data = await gatherBriefData();
+  const caption = briefCaption(data);
+  const { panels } = await renderBrief(data);
+  try {
+    await sendBriefAlbum(api, chatId, panels, caption);
+  } catch (e) {
+    console.error('sendMorningBrief album failed, falling back to text:', e instanceof Error ? e.message : e);
+    await api.sendMessage(chatId, caption);
+  }
 }

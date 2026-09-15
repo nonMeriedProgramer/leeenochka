@@ -1,8 +1,8 @@
-import { Bot, InlineKeyboard, InputFile } from 'grammy';
+import { Bot, InlineKeyboard } from 'grammy';
 import { ownerGuard } from './guard.js';
 import { kyivNow } from '../utils/kyiv.js';
-import { renderBriefImage } from '../services/brief/image.js';
-import { fetchBriefStats } from '../services/brief/stats.js';
+import { gatherBriefData } from '../services/brief/data.js';
+import { renderBrief, sendBriefAlbum, sendMorningBrief } from '../services/brief/index.js';
 import { runAgent } from '../ai/agent.js';
 import { saveMessage } from '../ai/claude.js';
 import { transcribeAudio } from '../transcription/whisper.js';
@@ -20,7 +20,6 @@ import {
   DAYS as GYM_DAYS, gymScheduleFor, setGymSchedule, lastWeekGymDays,
   dayIndexInSchedule, resolveDay, renderSession, cycleStart, startCycle,
 } from '../services/training/index.js';
-import { sendMorningBrief } from '../services/brief/index.js';
 import {
   syncWellnessFromIntervals, buildTrainingPost, fetchActivities, intervalsConfigured,
 } from '../services/training/intervals.js';
@@ -432,18 +431,24 @@ export function createBot(token: string) {
     await sendMorningBrief(ctx.api, ctx.chat.id);
   });
 
-  // ─── /brief_debug — чому не вийшла картинка (тимчасова діагностика) ──
+  // ─── /brief_debug — той самий бриф + звіт, яке джерело чи панель не спрацювали ──
   bot.command('brief_debug', async (ctx) => {
-    const stats = await fetchBriefStats();
-    if (!stats) { await ctx.reply('Немає даних intervals.icu за 30 днів. Перевір INTERVALS_API_KEY і Garmin-конекшн там.'); return; }
-    const dateLabel = new Date().toLocaleDateString('uk-UA', {
-      timeZone: 'Europe/Kyiv', weekday: 'long', day: 'numeric', month: 'long',
-    });
+    await ctx.reply('⏳ Збираю Garmin, intervals.icu, погоду й малюю панелі...');
     try {
-      const png = await renderBriefImage(stats, dateLabel);
-      await ctx.replyWithPhoto(new InputFile(png, 'brief.png'), { caption: `OK: ${png.length} байт` });
+      const data = await gatherBriefData();
+      const { panels, errors } = await renderBrief(data);
+      const g = data.garmin;
+      const got = [
+        `Garmin: ${g.fatal ? `✗ ${g.fatal.message}` : `✓ сон ${g.sleep ? '✓' : '✗'} · готовність ${g.readiness ? '✓' : '✗'} · статус ${g.status ? '✓' : '✗'} · HRV ${g.hrv ? '✓' : '✗'}`}`,
+        `intervals.icu: ${data.wellness.length} днів wellness, ${data.activities.length} тренувань за тиждень`,
+        `Погода: ${data.weather ? '✓' : '✗'} · план: ${data.plan.length} пунктів`,
+        `Панелі: ${panels.map((p) => `${p.name} ${Math.round(p.png.length / 1024)}КБ`).join(', ') || 'жодної'}`,
+      ];
+      const problems = [...data.sources, ...errors];
+      const caption = `🔧 brief_debug\n${got.join('\n')}${problems.length ? `\n\nПроблеми:\n${problems.map((p) => `• ${p}`).join('\n')}` : ''}`;
+      await sendBriefAlbum(ctx.api, ctx.chat.id, panels, caption.slice(0, 1024));
     } catch (e) {
-      await ctx.reply(`❌ Рендер картинки впав:\n${(e instanceof Error ? (e.stack || e.message) : String(e)).slice(0, 800)}`);
+      await ctx.reply(`❌ brief_debug впав:\n${(e instanceof Error ? (e.stack || e.message) : String(e)).slice(0, 800)}`);
     }
   });
 
