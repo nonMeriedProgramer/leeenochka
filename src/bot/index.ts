@@ -1,8 +1,8 @@
 import { Bot, InlineKeyboard, InputFile } from 'grammy';
 import { ownerGuard } from './guard.js';
 import { kyivNow } from '../utils/kyiv.js';
-import { wellnessFor } from '../services/training/garmin.js';
 import { renderBriefImage } from '../services/brief/image.js';
+import { fetchBriefStats } from '../services/brief/stats.js';
 import { runAgent } from '../ai/agent.js';
 import { saveMessage } from '../ai/claude.js';
 import { transcribeAudio } from '../transcription/whisper.js';
@@ -434,11 +434,13 @@ export function createBot(token: string) {
 
   // ─── /brief_debug — чому не вийшла картинка (тимчасова діагностика) ──
   bot.command('brief_debug', async (ctx) => {
-    const { date } = kyivNow();
-    const w = await wellnessFor(date);
-    if (!w) { await ctx.reply(`Немає даних garmin_wellness за ${date}. Спершу /garmin_sync.`); return; }
+    const stats = await fetchBriefStats();
+    if (!stats) { await ctx.reply('Немає даних intervals.icu за 30 днів. Перевір INTERVALS_API_KEY і Garmin-конекшн там.'); return; }
+    const dateLabel = new Date().toLocaleDateString('uk-UA', {
+      timeZone: 'Europe/Kyiv', weekday: 'long', day: 'numeric', month: 'long',
+    });
     try {
-      const png = await renderBriefImage(w, date);
+      const png = await renderBriefImage(stats, dateLabel);
       await ctx.replyWithPhoto(new InputFile(png, 'brief.png'), { caption: `OK: ${png.length} байт` });
     } catch (e) {
       await ctx.reply(`❌ Рендер картинки впав:\n${(e instanceof Error ? (e.stack || e.message) : String(e)).slice(0, 800)}`);

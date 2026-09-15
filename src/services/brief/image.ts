@@ -4,7 +4,7 @@ import path from 'node:path';
 import satori from 'satori';
 import { html } from 'satori-html';
 import { Resvg } from '@resvg/resvg-js';
-import type { WellnessRow } from '../training/garmin.js';
+import { formLabel, type BriefStats, type Trend } from './stats.js';
 
 // Картинка ранкового брифу — малюється КОДОМ (satori → SVG → PNG), без AI і без
 // жодних API-ключів чи оплати. Цифри й українські підписи завжди точні. Стиль —
@@ -24,8 +24,12 @@ function fonts() {
 const C = {
   bg: '#0b0f14', card: '#151b23', border: '#222c37',
   text: '#e8eef5', label: '#9aa4b0', muted: '#7d8894',
-  green: '#8fe3a0', violet: '#9b8cf2',
+  green: '#8fe3a0', violet: '#9b8cf2', amber: '#f2b84c',
 };
+
+function gap(): string {
+  return '<div style="display:flex;width:22px;"></div>';
+}
 
 function statCard(label: string, value: string, sub: string, accent: string): string {
   return `<div style="display:flex;flex-direction:column;background:${C.card};border:1px solid ${C.border};border-radius:24px;padding:30px 26px;flex:1;">
@@ -39,11 +43,12 @@ function wideCard(label: string, value: string, sub: string, accent: string): st
   return `<div style="display:flex;flex-direction:column;background:${C.card};border:1px solid ${C.border};border-radius:24px;padding:30px;flex:1;">
     <div style="color:${C.label};font-size:26px;">${label}</div>
     <div style="display:flex;align-items:flex-end;margin-top:8px;">
-      <div style="display:flex;color:${accent};font-size:56px;font-weight:700;">${value}</div>
+      <div style="display:flex;color:${C.text};font-size:56px;font-weight:700;">${value}</div>
     </div>
-    <div style="display:flex;color:${C.muted};font-size:24px;margin-top:4px;">${sub}</div>
+    <div style="display:flex;color:${accent};font-size:24px;margin-top:6px;">${sub}</div>
   </div>`;
 }
+
 
 function readinessCard(score: number): string {
   return `<div style="display:flex;flex-direction:column;align-items:center;background:${C.card};border:1px solid ${C.border};border-radius:24px;padding:30px;flex:1;">
@@ -57,33 +62,76 @@ function readinessCard(score: number): string {
   </div>`;
 }
 
-function buildHtml(w: WellnessRow, dateLabel: string): string {
+/**
+ * Підпис-дельта під карткою: "+14 від сер. 30д" / "−7 мс від сер. 30д" + колір.
+ * Знак замість стрілки — Unicode-стрілки й CSS-трикутники (border-hack) у
+ * satori/Noto Sans із цим набором шрифтів не рендерились (тофу-квадрат).
+ * invert=true для метрик, де НИЖЧЕ за середнє — краще (пульс спокою); для
+ * решти вище — краще.
+ */
+function trendSub(t: Trend, unit: string, digits = 0, invert = false): { text: string; accent: string } {
+  const threshold = digits ? 0.05 : 1;
+  if (t.delta == null || Math.abs(t.delta) < threshold) {
+    return { text: 'як зазвичай', accent: C.muted };
+  }
+  const up = t.delta > 0;
+  const good = invert ? !up : up;
+  const accent = good ? C.green : C.amber;
+  const sign = up ? '+' : '-';
+  const d = digits ? Math.abs(t.delta).toFixed(digits) : String(Math.abs(Math.round(t.delta)));
+  return { text: `${sign}${d}${unit} від сер. 30д`, accent };
+}
+
+function fmtVal(t: Trend, digits = 0): string {
+  return digits ? t.value.toFixed(digits) : String(Math.round(t.value));
+}
+
+function buildHtml(s: BriefStats, dateLabel: string): string {
   const rows: string[] = [];
 
-  // Верхній ряд: до трьох статкарток
-  const top: string[] = [];
-  if (w.sleep_score != null || w.sleep_hours != null) {
-    top.push(statCard('Сон', String(w.sleep_score ?? '—'), w.sleep_hours != null ? `${w.sleep_hours} год` : 'сон', C.green));
+  // Ряд 1: Fitness / Fatigue / Form — тренувальне навантаження, рахує intervals.icu
+  // з усієї історії, тож щодня реально рухається (на відміну від static "готовності").
+  if (s.fitness != null && s.fatigue != null && s.form != null) {
+    const sign = s.form > 0 ? '+' : '';
+    const top = [
+      statCard('Фітнес', String(s.fitness), 'CTL · довге навантаження', C.green),
+      statCard('Втома', String(s.fatigue), 'ATL · останній тиждень', C.amber),
+      statCard('Форма', `${sign}${s.form}`, formLabel(s.form), s.form >= 0 ? C.green : C.amber),
+    ];
+    rows.push(`<div style="display:flex;flex-direction:row;margin-top:26px;">${top.join(gap())}</div>`);
   }
-  if (w.body_battery_current != null) {
-    top.push(statCard('Заряд тіла', String(w.body_battery_current), 'заряд', C.violet));
-  }
-  if (w.stress_avg != null) {
-    top.push(statCard('Стрес', String(w.stress_avg), 'середній', C.violet));
-  }
-  if (top.length) rows.push(`<div style="display:flex;flex-direction:row;margin-top:26px;">${top.join('<div style="display:flex;width:22px;"></div>')}</div>`);
 
-  // Середній ряд: кільце готовності + HRV
+  // Ряд 2: Сон (з дельтою) + кільце готовності, якщо є
   const mid: string[] = [];
-  if (w.training_readiness != null) mid.push(readinessCard(w.training_readiness));
-  if (w.hrv_ms != null) mid.push(wideCard('Варіабельність пульсу', `${w.hrv_ms} мс`, 'HRV за ніч', C.green));
-  if (mid.length) rows.push(`<div style="display:flex;flex-direction:row;margin-top:22px;">${mid.join('<div style="display:flex;width:22px;"></div>')}</div>`);
+  if (s.sleepScore) {
+    const sub = trendSub(s.sleepScore, '', 0);
+    const subText = s.sleepHours != null ? `${sub.text} · ${s.sleepHours} год` : sub.text;
+    mid.push(wideCard('Сон', fmtVal(s.sleepScore), subText, sub.accent));
+  } else if (s.sleepHours != null) {
+    mid.push(wideCard('Сон', String(s.sleepHours), 'год', C.muted));
+  }
+  if (s.readiness != null) mid.push(readinessCard(s.readiness));
+  if (mid.length) rows.push(`<div style="display:flex;flex-direction:row;margin-top:22px;">${mid.join(gap())}</div>`);
 
-  // Нижній ряд: пульс спокою + кроки
-  const bot: string[] = [];
-  if (w.resting_hr != null) bot.push(wideCard('Пульс спокою', `${w.resting_hr}`, 'уд/хв', C.green));
-  if (w.steps != null) bot.push(wideCard('Кроки', w.steps.toLocaleString('uk-UA'), 'за сьогодні', C.green));
-  if (bot.length) rows.push(`<div style="display:flex;flex-direction:row;margin-top:22px;">${bot.join('<div style="display:flex;width:22px;"></div>')}</div>`);
+  // Ряд 3: HRV (вище — краще) + пульс спокою (нижче — краще)
+  const hr: string[] = [];
+  if (s.hrv) {
+    const sub = trendSub(s.hrv, ' мс');
+    hr.push(wideCard('HRV', `${fmtVal(s.hrv)} мс`, sub.text, sub.accent));
+  }
+  if (s.restingHr) {
+    const sub = trendSub(s.restingHr, ' уд/хв', 0, true);
+    hr.push(wideCard('Пульс спокою', fmtVal(s.restingHr), sub.text, sub.accent));
+  }
+  if (hr.length) rows.push(`<div style="display:flex;flex-direction:row;margin-top:22px;">${hr.join(gap())}</div>`);
+
+  // Ряд 4: кроки за ВЧОРА (завершений день, не "0 о 8 ранку")
+  if (s.stepsYesterday) {
+    const sub = trendSub(s.stepsYesterday, '');
+    rows.push(`<div style="display:flex;flex-direction:row;margin-top:22px;">${wideCard(
+      'Кроки (вчора)', Math.round(s.stepsYesterday.value).toLocaleString('uk-UA'), sub.text, sub.accent,
+    )}</div>`);
+  }
 
   return `<div style="display:flex;flex-direction:column;width:100%;height:100%;background:${C.bg};padding:56px;font-family:'Noto Sans';">
     <div style="display:flex;flex-direction:column;">
@@ -95,28 +143,31 @@ function buildHtml(w: WellnessRow, dateLabel: string): string {
 }
 
 // Приблизна висота полотна від кількості рядків (щоб контент не обрізало і не було порожнечі).
-function canvasHeight(w: WellnessRow): number {
-  let h = 56 + 120 + 56; // паддінги + шапка
-  if (w.sleep_score != null || w.sleep_hours != null || w.body_battery_current != null || w.stress_avg != null) h += 26 + 190;
-  if (w.training_readiness != null || w.hrv_ms != null) h += 22 + 340;
-  if (w.resting_hr != null || w.steps != null) h += 22 + 215;
+// Емпірично підібрано з запасом (перший варіант обрізав останню картку) — краще
+// зайвий чорний простір знизу, ніж обрізаний текст.
+function canvasHeight(s: BriefStats): number {
+  let h = 56 + 120 + 56 + 40; // паддінги + шапка + запас
+  if (s.fitness != null && s.fatigue != null && s.form != null) h += 26 + 210;
+  if (s.sleepScore || s.sleepHours != null || s.readiness != null) h += 22 + (s.readiness != null ? 360 : 210);
+  if (s.hrv || s.restingHr) h += 22 + 210;
+  if (s.stepsYesterday) h += 22 + 210;
   return h;
 }
 
 /** Рендерить PNG дашборду; КИДАЄ помилку (для діагностики). */
-export async function renderBriefImage(w: WellnessRow, dateLabel: string): Promise<Buffer> {
+export async function renderBriefImage(s: BriefStats, dateLabel: string): Promise<Buffer> {
   const width = 1080;
-  const height = canvasHeight(w);
-  const markup = html(buildHtml(w, dateLabel));
+  const height = canvasHeight(s);
+  const markup = html(buildHtml(s, dateLabel));
   const svg = await satori(markup as Parameters<typeof satori>[0], { width, height, fonts: fonts() });
   const png = new Resvg(svg, { fitTo: { mode: 'width', value: width } }).render().asPng();
   return Buffer.from(png);
 }
 
 /** Генерує PNG ранкового дашборду; null якщо рендер не вдався (безпечна обгортка). */
-export async function generateBriefImage(w: WellnessRow, dateLabel: string): Promise<Buffer | null> {
+export async function generateBriefImage(s: BriefStats, dateLabel: string): Promise<Buffer | null> {
   try {
-    return await renderBriefImage(w, dateLabel);
+    return await renderBriefImage(s, dateLabel);
   } catch (e) {
     console.error('generateBriefImage failed:', e instanceof Error ? e.message : e);
     return null;
