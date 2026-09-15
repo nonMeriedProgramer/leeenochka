@@ -6,6 +6,8 @@ import { kyivWeekStart, nextWeekStart, closePastWeeks, ensureWeekSeeded } from '
 import { pendingGarminActivities, markGarminProcessed, proposalsFromActivity } from '../training/garmin.js';
 import { sendMorningBrief } from '../brief/index.js';
 import { syncWellnessFromIntervals } from '../training/intervals.js';
+import { fetchSleepEndReal } from '../garmin/morning.js';
+import { garminConfigured } from '../garmin/client.js';
 import { postNewTrainings, trainingPostsEnabled } from '../training/eveningPost.js';
 import { kyivNow, timeKyiv } from '../../utils/kyiv.js';
 
@@ -32,13 +34,39 @@ async function fireDueReminders(bot: Bot) {
   }
 }
 
-// ─── Ранковий бриф — раз на день, вікно 08:00–08:05 ────────────
+// ─── Ранковий бриф — через 10 хв після завершення сну (за Garmin) ──────
+// Опитуємо Garmin не частіше ніж раз на 5 хв (не з кожним тіком), щоб не
+// довбати їхній API щоразу, поки ще спиш. Якщо Garmin не підключений або сон
+// так і не прийшов — запасний вихід о 11:00, щоб бриф не загубився зовсім.
+const WAKE_CHECK_INTERVAL_MS = 5 * 60_000;
+const WAKE_DELAY_MS = 10 * 60_000;
+const FALLBACK_HOUR = 11;
+
 let lastBriefDate = '';
+let lastWakeCheckAt = 0;
+
 async function maybeMorningBrief(bot: Bot) {
   const owner = ownerId();
   if (!owner) return;
   const { hour, minute, date } = kyivNow();
-  if (hour !== 8 || minute > 5 || lastBriefDate === date) return;
+  if (lastBriefDate === date || hour < 4) return; // вночі до сну не перевіряємо
+
+  let shouldSend = false;
+  const now = Date.now();
+
+  if (garminConfigured() && now - lastWakeCheckAt >= WAKE_CHECK_INTERVAL_MS) {
+    lastWakeCheckAt = now;
+    try {
+      const wokeAt = await fetchSleepEndReal(date);
+      if (wokeAt != null && now >= wokeAt + WAKE_DELAY_MS) shouldSend = true;
+    } catch { /* спробуємо за 5 хв ще раз */ }
+  }
+
+  // Запасний вихід: сон так і не з'явився (нема Garmin, не засинхронився,
+  // помилка) — все одно шлемо бриф, щоб день не лишився без нього.
+  if (!shouldSend && hour >= FALLBACK_HOUR && minute <= 5) shouldSend = true;
+
+  if (!shouldSend) return;
   lastBriefDate = date;
 
   // Спершу підтягуємо свіжі дані з Garmin, щоб бриф уже мав сон/body battery за ніч.

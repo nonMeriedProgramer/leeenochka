@@ -208,6 +208,19 @@ export function parseTrainingStatus(data: J): GarminTrainingStatus | null {
   };
 }
 
+/**
+ * Реальний (UTC) час завершення сну за цю дату, або null, якщо Garmin ще
+ * не синхронізував сон (спиш або годинник ще не скинув дані). Легкий запит —
+ * для опитування «прокинувся?» без витягання решти брифу щоразу.
+ */
+export async function fetchSleepEndReal(date: string): Promise<number | null> {
+  if (!garminConfigured()) return null;
+  const name = await garminDisplayName();
+  const data = await garminGet<J>(`/wellness-service/wellness/dailySleepData/${name}`, { date, nonSleepBufferMinutes: 60 });
+  const sleep = parseSleep(data);
+  return sleep ? sleep.endLocal - sleep.tzOffsetMs : null;
+}
+
 export async function fetchGarminMorning(date: string, yesterday: string): Promise<GarminMorning> {
   const out: GarminMorning = {
     sleep: null, hrv: null, readiness: null, status: null,
