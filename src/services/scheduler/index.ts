@@ -9,6 +9,7 @@ import { syncWellnessFromIntervals } from '../training/intervals.js';
 import { fetchSleepEndReal } from '../garmin/morning.js';
 import { garminConfigured } from '../garmin/client.js';
 import { postNewTrainings, trainingPostsEnabled } from '../training/eveningPost.js';
+import { olxWatchEnabled, runOlxWatch } from '../olx/watch.js';
 import { kyivNow, timeKyiv } from '../../utils/kyiv.js';
 
 const TICK_MS = 30_000; // перевірка кожні 30с
@@ -179,6 +180,32 @@ async function maybeEveningTrainingPost(bot: Bot) {
   }
 }
 
+// ─── Моніторинг OLX — 4 рази на добу ───────────────────────────────────
+// Збої (напр. CloudFront відбив запит) шлемо власнику в приват, не в групу,
+// інакше фіча могла б мовчки перестати працювати.
+const OLX_HOURS = [9, 13, 17, 21];
+let lastOlxRunKey = '';
+
+async function maybeOlxWatch(bot: Bot) {
+  if (!olxWatchEnabled()) return;
+  const { hour, minute, date } = kyivNow();
+  const key = `${date}:${hour}`;
+  if (!OLX_HOURS.includes(hour) || minute > 5 || lastOlxRunKey === key) return;
+  lastOlxRunKey = key;
+
+  const owner = ownerId();
+  try {
+    const r = await runOlxWatch(bot.api);
+    if (r.errors.length && owner) {
+      await bot.api.sendMessage(owner, `⚠️ OLX-моніторинг:\n${r.errors.join('\n').slice(0, 800)}`).catch(() => {});
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('olx watch failed:', msg);
+    if (owner) await bot.api.sendMessage(owner, `⚠️ OLX-моніторинг впав:\n${msg.slice(0, 500)}`).catch(() => {});
+  }
+}
+
 // Ролл тижня — ідемпотентно щотіку: зафіксувати минулі тижні (знімок) + засіяти повтори
 async function rollWeek() {
   const ws = kyivWeekStart();
@@ -197,6 +224,7 @@ export function startScheduler(bot: Bot) {
     try { await maybePlanPrompt(bot); } catch { /* ignore */ }
     try { await maybeProposeGarminSets(bot); } catch { /* ignore */ }
     try { await maybeEveningTrainingPost(bot); } catch { /* ignore */ }
+    try { await maybeOlxWatch(bot); } catch { /* ignore */ }
   };
   setInterval(tick, TICK_MS);
   console.log('⏰ Scheduler started (reminders + calendar + brief + plan)');

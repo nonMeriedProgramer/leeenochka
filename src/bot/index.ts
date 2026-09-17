@@ -5,6 +5,8 @@ import { gatherBriefData } from '../services/brief/data.js';
 import { renderBrief, sendBriefAlbum, sendMorningBrief } from '../services/brief/index.js';
 import { garminCheck } from '../services/garmin/client.js';
 import { probeGarminDay } from '../services/garmin/probe.js';
+import { fetchOffers } from '../services/olx/api.js';
+import { SEARCHES, selectHits, runOlxWatch, olxWatchEnabled } from '../services/olx/watch.js';
 import { runAgent } from '../ai/agent.js';
 import { saveMessage } from '../ai/claude.js';
 import { transcribeAudio } from '../transcription/whisper.js';
@@ -474,6 +476,39 @@ export function createBot(token: string) {
       await ctx.reply(`✅ ${await syncWellnessFromIntervals()}`);
     } catch (e) {
       await ctx.reply(`❌ Помилка синку:\n${(e instanceof Error ? e.message : String(e)).slice(0, 800)}`);
+    }
+  });
+
+  // ─── /olx_check — чи пускає OLX запити з цього сервера ─────────────────
+  // Головна перевірка: CloudFront перед OLX ріже IP дата-центрів, і локально
+  // робочий код може отримати 403 саме з Render. Нічого не постить.
+  bot.command('olx_check', async (ctx) => {
+    await ctx.reply('⏳ Перевіряю OLX...');
+    const lines = [`Пошуків у коді: ${SEARCHES.length}`, `Група: ${olxWatchEnabled() ? '✓ задана' : '✗ OLX_CHANNEL_ID не задано'}`];
+    for (const s of SEARCHES) {
+      try {
+        const offers = await fetchOffers(s);
+        const hits = selectHits(offers, s);
+        const price = s.priceFrom != null || s.priceTo != null ? `, ціна ${s.priceFrom ?? '—'}–${s.priceTo ?? '—'}` : '';
+        lines.push(`«${s.query}» [${s.words.join(', ')}${price}]: ${offers.length} оголошень → ${hits.length} збігів`);
+        if (hits[0]) lines.push(`   напр.: ${hits[0].offer.title.slice(0, 60)} — ${hits[0].offer.price?.label ?? 'без ціни'}`);
+      } catch (e) {
+        lines.push(`«${s.query}»: ✗ ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    await ctx.reply(`🔧 olx_check\n${lines.join('\n')}`);
+  });
+
+  // ─── /olx_now — ручний прогін моніторингу з постингом у групу ──────────
+  bot.command('olx_now', async (ctx) => {
+    await ctx.reply('⏳ Тягну OLX і публікую нові...');
+    try {
+      const r = await runOlxWatch(ctx.api);
+      const seeded = r.seeded ? `\nЗасіяно без поста (перший прогін): ${r.seeded}` : '';
+      const errors = r.errors.length ? `\n\nПроблеми:\n${r.errors.map((e) => `• ${e}`).join('\n')}` : '';
+      await ctx.reply(`✅ Перевірено ${r.checked} оголошень · запощено ${r.posted}${seeded}${errors}`.slice(0, 3500));
+    } catch (e) {
+      await ctx.reply(`❌ OLX-прогін впав:\n${(e instanceof Error ? e.message : String(e)).slice(0, 800)}`);
     }
   });
 
