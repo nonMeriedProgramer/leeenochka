@@ -4,6 +4,7 @@ import { kyivNow } from '../utils/kyiv.js';
 import { gatherBriefData } from '../services/brief/data.js';
 import { renderBrief, sendBriefAlbum, sendMorningBrief } from '../services/brief/index.js';
 import { garminCheck } from '../services/garmin/client.js';
+import { probeGarminDay } from '../services/garmin/probe.js';
 import { runAgent } from '../ai/agent.js';
 import { saveMessage } from '../ai/claude.js';
 import { transcribeAudio } from '../transcription/whisper.js';
@@ -456,6 +457,13 @@ export function createBot(token: string) {
   // ─── /garmin_check — чи живий токен Garmin і чи оновлюється він із сервера ──
   bot.command('garmin_check', async (ctx) => {
     await ctx.reply(`🔧 garmin_check\n${await garminCheck()}`);
+  });
+
+  // ─── /garmin_probe — які денні дані Garmin реально віддає (під вечірній звіт) ──
+  bot.command('garmin_probe', async (ctx) => {
+    const date = (ctx.match?.trim() || kyivNow().date);
+    await ctx.reply('⏳ Опитую ендпоінти Garmin...');
+    await ctx.reply(await probeGarminDay(date));
   });
 
   // ─── /garmin_sync — ручний запуск синку wellness (через Intervals.icu) ──
