@@ -120,6 +120,39 @@ const PROBES: Probe[] = [
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
 
+// ─── Сира відповідь одного ендпоінта (щоб розібрати незрозумілу структуру) ──
+const RAW: Record<string, (date: string, name: string) => Promise<unknown>> = {
+  bb: (date) => garminGet('/wellness-service/wellness/bodyBattery/reports/daily', { startDate: date, endDate: date }),
+  bbe: (date) => garminGet(`/wellness-service/wellness/bodyBattery/events/${date}`),
+  stress: (date) => garminGet(`/wellness-service/wellness/dailyStress/${date}`),
+  hr: (date, name) => garminGet(`/wellness-service/wellness/dailyHeartRate/${name}`, { date }),
+  steps: (date, name) => garminGet(`/wellness-service/wellness/dailySummaryChart/${name}`, { date }),
+  floors: (date) => garminGet(`/wellness-service/wellness/floorsChartData/daily/${date}`),
+  resp: (date) => garminGet(`/wellness-service/wellness/daily/respiration/${date}`),
+  spo2: (date) => garminGet(`/wellness-service/wellness/daily/spo2/${date}`),
+  im: (date) => garminGet(`/wellness-service/wellness/daily/im/${date}`),
+  endurance: (date) => garminGet('/metrics-service/metrics/endurancescore', { startDate: date, endDate: date }),
+  hill: (date) => garminGet('/metrics-service/metrics/hillscore', { startDate: date, endDate: date }),
+};
+
+export const RAW_KEYS = Object.keys(RAW);
+
+/**
+ * Сирий JSON ендпоінта, скорочений під ліміт Telegram. Довгі масиви значень
+ * ріжемо до кількох елементів — потрібна структура, а не всі точки.
+ */
+export async function rawGarminSample(key: string, date: string): Promise<string> {
+  const fn = RAW[key];
+  if (!fn) return `Невідомий ключ. Доступні: ${RAW_KEYS.join(', ')}`;
+  let name = '';
+  try { name = await garminDisplayName(); } catch { /* більшості ендпоінтів ім'я не треба */ }
+
+  const data = await fn(date, name);
+  const short = JSON.parse(JSON.stringify(data), (_k, v) =>
+    (Array.isArray(v) && v.length > 4 ? [...v.slice(0, 3), `…ще ${v.length - 3}`] : v));
+  return JSON.stringify(short, null, 1).slice(0, 3500);
+}
+
 /** Звіт по всіх ендпоінтах: що доступне для вечірньої панелі, а що ні. */
 export async function probeGarminDay(date: string): Promise<string> {
   let name: string;

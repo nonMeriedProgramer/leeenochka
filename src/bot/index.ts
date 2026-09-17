@@ -4,7 +4,7 @@ import { kyivNow } from '../utils/kyiv.js';
 import { gatherBriefData } from '../services/brief/data.js';
 import { renderBrief, sendBriefAlbum, sendMorningBrief } from '../services/brief/index.js';
 import { garminCheck } from '../services/garmin/client.js';
-import { probeGarminDay } from '../services/garmin/probe.js';
+import { probeGarminDay, rawGarminSample, RAW_KEYS } from '../services/garmin/probe.js';
 import { fetchOffers } from '../services/olx/api.js';
 import { SEARCHES, selectHits, runOlxWatch, olxWatchEnabled } from '../services/olx/watch.js';
 import { runAgent } from '../ai/agent.js';
@@ -466,6 +466,17 @@ export function createBot(token: string) {
     const date = (ctx.match?.trim() || kyivNow().date);
     await ctx.reply('⏳ Опитую ендпоінти Garmin...');
     await ctx.reply(await probeGarminDay(date));
+  });
+
+  // ─── /garmin_raw <ключ> [дата] — сира відповідь ендпоінта (розбір структури) ──
+  bot.command('garmin_raw', async (ctx) => {
+    const [key, dateArg] = (ctx.match?.trim() || '').split(/\s+/);
+    if (!key) { await ctx.reply(`Вкажи ключ: ${RAW_KEYS.join(', ')}`); return; }
+    try {
+      await ctx.reply(await rawGarminSample(key, dateArg || kyivNow().date));
+    } catch (e) {
+      await ctx.reply(`❌ ${(e instanceof Error ? e.message : String(e)).slice(0, 500)}`);
+    }
   });
 
   // ─── /garmin_sync — ручний запуск синку wellness (через Intervals.icu) ──
