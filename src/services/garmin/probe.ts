@@ -29,17 +29,10 @@ const PROBES: Probe[] = [
       const d = await garminGet<J[]>('/wellness-service/wellness/bodyBattery/reports/daily', { startDate: date, endDate: date });
       const day = Array.isArray(d) ? d[0] : null;
       if (!day) return 'порожньо';
-      // [timestamp, status, level, version]
-      return `${series(day.bodyBatteryValuesArray, 2)}; заряджено +${n(day.charged) ?? '?'}, злито −${n(day.drained) ?? '?'}`;
-    },
-  },
-  {
-    label: 'Події Body Battery',
-    run: async (date) => {
-      const ev = await garminGet<J[]>(`/wellness-service/wellness/bodyBattery/events/${date}`);
-      if (!Array.isArray(ev) || !ev.length) return 'порожньо';
-      const kinds = [...new Set(ev.map((e) => String(e.event?.eventType ?? e.eventType ?? '?')))];
-      return `${ev.length} подій: ${kinds.join(', ')}`;
+      // [timestamp, bodyBatteryLevel] — підтверджено bodyBatteryValueDescriptorDTOList
+      const events = Array.isArray(day.bodyBatteryActivityEvent) ? day.bodyBatteryActivityEvent : [];
+      const kinds = events.map((e: J) => `${e.eventType}${n(e.bodyBatteryImpact) != null ? `(${e.bodyBatteryImpact > 0 ? '+' : ''}${e.bodyBatteryImpact})` : ''}`);
+      return `${series(day.bodyBatteryValuesArray, 1)}; заряджено +${n(day.charged) ?? '?'}, злито −${n(day.drained) ?? '?'}; події: ${kinds.join(', ') || 'немає'}`;
     },
   },
   {
