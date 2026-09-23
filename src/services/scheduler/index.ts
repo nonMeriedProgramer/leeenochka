@@ -9,6 +9,7 @@ import { syncWellnessFromIntervals } from '../training/intervals.js';
 import { fetchSleepEndReal } from '../garmin/morning.js';
 import { garminConfigured } from '../garmin/client.js';
 import { postNewTrainings, trainingPostsEnabled } from '../training/eveningPost.js';
+import { sendEveningReport } from '../evening/index.js';
 import { kyivNow, timeKyiv } from '../../utils/kyiv.js';
 
 const TICK_MS = 30_000; // перевірка кожні 30с
@@ -179,6 +180,23 @@ async function maybeEveningTrainingPost(bot: Bot) {
   }
 }
 
+// ─── Вечірній звіт — раз на день, вікно 22:00–22:05, лише власнику ────
+let lastEveningReportDate = '';
+async function maybeEveningReport(bot: Bot) {
+  const owner = ownerId();
+  if (!owner) return;
+  const { hour, minute, date } = kyivNow();
+  if (hour !== 22 || minute > 5 || lastEveningReportDate === date) return;
+  lastEveningReportDate = date;
+  try {
+    await sendEveningReport(bot.api, owner);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('evening report failed:', msg);
+    await bot.api.sendMessage(owner, `⚠️ Вечірній звіт не вийшов:\n${msg.slice(0, 500)}`).catch(() => {});
+  }
+}
+
 // Ролл тижня — ідемпотентно щотіку: зафіксувати минулі тижні (знімок) + засіяти повтори
 async function rollWeek() {
   const ws = kyivWeekStart();
@@ -197,6 +215,7 @@ export function startScheduler(bot: Bot) {
     try { await maybePlanPrompt(bot); } catch { /* ignore */ }
     try { await maybeProposeGarminSets(bot); } catch { /* ignore */ }
     try { await maybeEveningTrainingPost(bot); } catch { /* ignore */ }
+    try { await maybeEveningReport(bot); } catch { /* ignore */ }
   };
   setInterval(tick, TICK_MS);
   console.log('⏰ Scheduler started (reminders + calendar + brief + plan)');

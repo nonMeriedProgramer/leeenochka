@@ -247,6 +247,15 @@ function hrLine(a: IcuActivity): string | null {
   return `❤️ пульс сер ${a.average_heartrate ?? '—'} · макс ${a.max_heartrate ?? '—'}`;
 }
 
+/** Зона, у якій проведено найбільше часу — для компактної плитки (вечірній звіт). */
+export function dominantZone(times: number[] | undefined): { zone: number; seconds: number } | null {
+  if (!times?.length) return null;
+  let zone = -1;
+  let max = 0;
+  times.forEach((t, i) => { if ((t || 0) > max) { max = t; zone = i; } });
+  return zone < 0 ? null : { zone: zone + 1, seconds: max };
+}
+
 // «Важко» = дві найвищі зони, скільки б їх у Гарміна не було налаштовано
 // (стандартні 5 чи, як у нашому випадку, 6-7) — завжди підпис із двох
 // РЕАЛЬНИХ номерів зон, а не захардкоджене "Z4+".

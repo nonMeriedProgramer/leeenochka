@@ -62,6 +62,42 @@ export function ring(value: number | null, color: string, size = 92, stroke = 9,
   </svg>`, size, size);
 }
 
+// ─── Кілька кілець в одному SVG (кільця активності, як в Apple Fitness) ──
+export function ringStack(values: Array<{ pct: number | null; color: string }>, size = 320, stroke = 26): string {
+  const c = size / 2;
+  const gap = 6;
+  const pad = 6; // трохи повітря зверху — на відміну від gauge() це повне коло, без відкритого низу
+  const circles = values.map(({ pct, color }, i) => {
+    const r = c - stroke / 2 - pad - i * (stroke + gap);
+    if (r <= 0) return '';
+    const circ = 2 * Math.PI * r;
+    const v = pct == null ? 0 : Math.max(0, Math.min(100, pct));
+    const dash = (circ * v) / 100;
+    const track = `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${PAL.track}" stroke-width="${stroke}"/>`;
+    const val = v > 0
+      ? `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linecap="round"
+          stroke-dasharray="${f1(dash)} ${f1(circ)}" transform="rotate(-90 ${c} ${c})"/>` : '';
+    return track + val;
+  }).join('');
+  return img(`<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${circles}</svg>`, size, size);
+}
+
+// ─── Горизонтальна смуга з кількох суцільних сегментів (розклад стресу за день) ──
+export function stackedBar(parts: Array<{ pct: number; color: string }>, w = 300, h = 20): string {
+  const total = parts.reduce((s, p) => s + Math.max(0, p.pct), 0) || 1;
+  let x = 0;
+  const segs = parts.filter((p) => p.pct > 0).map((p) => {
+    const sw = (Math.max(0, p.pct) / total) * w;
+    const rect = `<rect x="${f1(x)}" y="0" width="${f1(sw)}" height="${h}" fill="${p.color}"/>`;
+    x += sw;
+    return rect;
+  }).join('');
+  return img(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+    <clipPath id="sb"><rect x="0" y="0" width="${w}" height="${h}" rx="${h / 2}"/></clipPath>
+    <g clip-path="url(#sb)"><rect x="0" y="0" width="${w}" height="${h}" fill="${PAL.track}"/>${segs}</g>
+  </svg>`, w, h);
+}
+
 // ─── Горизонтальна смуга-частка (фаза сну, фактор готовності) ─────────
 export function barFill(pct: number, color: string, w = 300, h = 14): string {
   const p = Math.max(0, Math.min(100, pct));

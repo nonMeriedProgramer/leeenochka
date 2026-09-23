@@ -13,6 +13,7 @@ export interface Weather {
     sunrise: string | null; sunset: string | null;   // "06:33"
   };
   hourly: Array<{ hour: string; temp: number; code: number; precip: number | null; isDay: boolean }>;
+  tomorrow: { code: number; tMax: number; tMin: number } | null;
 }
 
 const HOURS = ['06', '09', '12', '15', '18', '21'];
@@ -22,7 +23,7 @@ export async function fetchWeather(): Promise<Weather | null> {
   const lon = process.env.WEATHER_LON ?? '30.52';
   const city = process.env.WEATHER_CITY ?? 'Київ';
   const url = 'https://api.open-meteo.com/v1/forecast'
-    + `?latitude=${lat}&longitude=${lon}&timezone=Europe%2FKyiv&forecast_days=1&wind_speed_unit=ms`
+    + `?latitude=${lat}&longitude=${lon}&timezone=Europe%2FKyiv&forecast_days=2&wind_speed_unit=ms`
     + '&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,is_day'
     + '&hourly=temperature_2m,weather_code,precipitation_probability'
     + '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max,sunrise,sunset,wind_speed_10m_max';
@@ -58,6 +59,10 @@ export function parseWeather(d: Record<string, any>, city: string): Weather | nu
       };
     }).filter((x): x is Weather['hourly'][number] => x !== null);
 
+    const tomorrow = dl.weather_code?.[1] != null && dl.temperature_2m_max?.[1] != null
+      ? { code: dl.weather_code[1], tMax: dl.temperature_2m_max[1], tMin: dl.temperature_2m_min?.[1] ?? dl.temperature_2m_max[1] }
+      : null;
+
     return {
       city,
       now: { temp: c.temperature_2m, feels: c.apparent_temperature, code: c.weather_code, wind: c.wind_speed_10m, isDay: c.is_day === 1 },
@@ -67,6 +72,7 @@ export function parseWeather(d: Record<string, any>, city: string): Weather | nu
         windMax: dl.wind_speed_10m_max?.[0] ?? null, sunrise, sunset,
       },
       hourly,
+      tomorrow,
     };
   }
 }

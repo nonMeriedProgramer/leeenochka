@@ -4,6 +4,7 @@
 // паралельно й незалежно: збій одного джерела не валить решту.
 
 import { kyivNow, timeKyiv } from '../../utils/kyiv.js';
+import { safe } from '../../utils/safe.js';
 import { getUpcomingEvents, isCalendarConnected } from '../calendar/index.js';
 import { todaySession } from '../training/index.js';
 import { fetchGarminMorning, type GarminMorning } from '../garmin/morning.js';
@@ -23,15 +24,6 @@ export interface BriefData {
   weather: Weather | null;
   stats: BriefStats | null;
   sources: string[];       // що саме не вдалось (для /brief_debug)
-}
-
-async function safe<T>(label: string, sources: string[], fn: () => Promise<T>, fallback: T): Promise<T> {
-  try {
-    return await fn();
-  } catch (e) {
-    sources.push(`${label}: ${e instanceof Error ? e.message : String(e)}`);
-    return fallback;
-  }
 }
 
 async function gatherPlan(sources: string[]): Promise<PlanItem[]> {

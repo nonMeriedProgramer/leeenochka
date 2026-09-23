@@ -1,8 +1,10 @@
-import { Bot, InlineKeyboard } from 'grammy';
+import { Bot, InlineKeyboard, InputFile } from 'grammy';
 import { ownerGuard } from './guard.js';
 import { kyivNow } from '../utils/kyiv.js';
 import { gatherBriefData } from '../services/brief/data.js';
 import { renderBrief, sendBriefAlbum, sendMorningBrief } from '../services/brief/index.js';
+import { gatherEveningData } from '../services/evening/data.js';
+import { renderEveningPanel } from '../services/evening/panel.js';
 import { garminCheck } from '../services/garmin/client.js';
 import { probeGarminDay, rawGarminSample, RAW_KEYS } from '../services/garmin/probe.js';
 import { runAgent } from '../ai/agent.js';
@@ -483,6 +485,26 @@ export function createBot(token: string) {
       await sendBriefAlbum(ctx.api, ctx.chat.id, panels, caption.slice(0, 1024));
     } catch (e) {
       await ctx.reply(`❌ brief_debug впав:\n${(e instanceof Error ? (e.stack || e.message) : String(e)).slice(0, 800)}`);
+    }
+  });
+
+  // ─── /evening_debug — вечірній звіт на вимогу + діагностика джерел ─────
+  bot.command('evening_debug', async (ctx) => {
+    await ctx.reply('⏳ Збираю Garmin, intervals.icu, план і погоду...');
+    try {
+      const data = await gatherEveningData();
+      const g = data.garmin;
+      const got = [
+        `Garmin: ${g ? `✓ кроки ${g.steps ?? '—'}, заряд ${g.bodyBattery.now ?? '—'}, стрес ${g.stress.avg ?? '—'}` : '✗'}`,
+        `Тренування: ${data.todayActivity ? '✓ є сьогодні' : `✗ днів без — ${data.daysSinceTraining ?? '—'}`}`,
+        `План дня: ${data.plan.done}/${data.plan.total}`,
+        `Погода завтра: ${data.tomorrowWeather ? '✓' : '✗'} · подія завтра: ${data.tomorrowEvent ? '✓' : '✗'}`,
+      ];
+      const caption = `🔧 evening_debug\n${got.join('\n')}${data.sources.length ? `\n\nПроблеми:\n${data.sources.map((s) => `• ${s}`).join('\n')}` : ''}`;
+      const png = await renderEveningPanel(data);
+      await ctx.replyWithPhoto(new InputFile(png, 'evening.png'), { caption: caption.slice(0, 1024) });
+    } catch (e) {
+      await ctx.reply(`❌ evening_debug впав:\n${(e instanceof Error ? (e.stack || e.message) : String(e)).slice(0, 800)}`);
     }
   });
 

@@ -25,9 +25,9 @@ function fonts() {
   ];
 }
 
-export async function renderPanel(body: string): Promise<Buffer> {
-  const markup = html(`<div style="display:flex;flex-direction:column;width:${W}px;height:${H}px;background:${PAL.bg};padding:${PAD}px;font-family:'Noto Sans';color:${PAL.text};">${body}</div>`);
-  const svg = await satori(markup as Parameters<typeof satori>[0], { width: W, height: H, fonts: fonts() });
+export async function renderPanel(body: string, height = H): Promise<Buffer> {
+  const markup = html(`<div style="display:flex;flex-direction:column;width:${W}px;height:${height}px;background:${PAL.bg};padding:${PAD}px;font-family:'Noto Sans';color:${PAL.text};">${body}</div>`);
+  const svg = await satori(markup as Parameters<typeof satori>[0], { width: W, height, fonts: fonts() });
   return Buffer.from(new Resvg(svg, { fitTo: { mode: 'width', value: W } }).render().asPng());
 }
 
