@@ -9,6 +9,7 @@
 import type { Api } from 'grammy';
 import db from '../../db/index.js';
 import { kyivNow } from '../../utils/kyiv.js';
+import { retry } from '../../utils/retry.js';
 import { hashtagForDay } from './channel.js';
 import { todaySession } from './index.js';
 import { buildTrainingPost, fetchActivities, intervalsConfigured, type IcuActivity, type TrainingPost } from './intervals.js';
@@ -60,7 +61,9 @@ async function postOne(api: Api, a: IcuActivity, today: string, result: PostResu
     }
   }
 
-  await api.sendMessage(Number(process.env.GYM_CHANNEL_ID), post.text, { parse_mode: 'HTML' });
+  // Разовий мережевий обрив ("Network request for 'sendMessage' failed!") не мав
+  // рахуватись за фінальну відмову — з такого одна спроба падає, друга проходить.
+  await retry(() => api.sendMessage(Number(process.env.GYM_CHANNEL_ID), post.text, { parse_mode: 'HTML' }));
   await db.run(
     `INSERT INTO training_posts (activity_id, activity_date, kind) VALUES ($1,$2,$3)
      ON CONFLICT (activity_id) DO NOTHING`,

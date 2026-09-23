@@ -2,6 +2,7 @@ import { createBot } from './bot/index.js';
 import { startServer } from './auth/oauth-server.js';
 import { startScheduler } from './services/scheduler/index.js';
 import { initDb } from './db/index.js';
+import { retry } from './utils/retry.js';
 import { createHash } from 'node:crypto';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -28,8 +29,16 @@ async function main() {
     console.log(`Webhook: ${webhookUrl}`);
     startServer(bot, port, webhookSecret);
 
-    // Самопінг щоб Render не засипав
-    setInterval(() => fetch(appUrl).catch(() => {}), 13 * 60 * 1000);
+    // Самопінг щоб Render не засипав. Одна невдала спроба раніше означала мовчазний
+    // пропуск на весь 13-хвилинний цикл — а це ризик заснути (тайм-аут простою 15 хв)
+    // і мовчки пропустити все заплановане (ранковий бриф, вечірній автопост) до
+    // наступного зовнішнього запиту. Тепер на збій — ще одна спроба через 15с.
+    setInterval(() => {
+      retry(async () => {
+        const r = await fetch(appUrl);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      }, 2, 15_000).catch((e) => console.error('self-ping failed twice:', e instanceof Error ? e.message : e));
+    }, 13 * 60 * 1000);
   } else {
     // Local dev: long polling
     startServer(bot, port);
