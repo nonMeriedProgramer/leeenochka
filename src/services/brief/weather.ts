@@ -13,7 +13,7 @@ export interface Weather {
     sunrise: string | null; sunset: string | null;   // "06:33"
   };
   hourly: Array<{ hour: string; temp: number; code: number; precip: number | null; isDay: boolean }>;
-  tomorrow: { code: number; tMax: number; tMin: number } | null;
+  tomorrow: { code: number; tMax: number; tMin: number; sunrise: string | null; sunset: string | null } | null;
 }
 
 const HOURS = ['06', '09', '12', '15', '18', '21'];
@@ -60,7 +60,11 @@ export function parseWeather(d: Record<string, any>, city: string): Weather | nu
     }).filter((x): x is Weather['hourly'][number] => x !== null);
 
     const tomorrow = dl.weather_code?.[1] != null && dl.temperature_2m_max?.[1] != null
-      ? { code: dl.weather_code[1], tMax: dl.temperature_2m_max[1], tMin: dl.temperature_2m_min?.[1] ?? dl.temperature_2m_max[1] }
+      ? {
+        code: dl.weather_code[1], tMax: dl.temperature_2m_max[1],
+        tMin: dl.temperature_2m_min?.[1] ?? dl.temperature_2m_max[1],
+        sunrise: hhmm(dl.sunrise?.[1]), sunset: hhmm(dl.sunset?.[1]),
+      }
       : null;
 
     return {

@@ -9,6 +9,7 @@ import { safe } from '../../utils/safe.js';
 import { getUpcomingEvents, isCalendarConnected } from '../calendar/index.js';
 import { getWeekItems, todayDayKey } from '../plan/index.js';
 import { fetchGarminDayStats, type GarminDayStats } from '../garmin/today.js';
+import { fetchGarminSleep, type GarminSleep } from '../garmin/morning.js';
 import { fetchActivities, fetchWellness, intervalsConfigured, type IcuActivity } from '../training/intervals.js';
 import { shiftDate } from '../brief/stats.js';
 import { typicalRange } from '../brief/ui.js';
@@ -18,31 +19,40 @@ export interface EveningData {
   date: string;
   dateLabel: string;
   garmin: GarminDayStats | null;
+  sleep: GarminSleep | null;         // минула ніч — фази, тривалість, пульс
   todayActivity: IcuActivity | null;
-  daysSinceTraining: number | null; // 0, якщо тренувався сьогодні
+  daysSinceTraining: number | null;  // 0, якщо тренувався сьогодні
+  weekMinutes: number | null;        // сума тренувань за останні 7 днів
   plan: { done: number; total: number };
   rhrRange: { low: number; high: number } | null;
   hrvAvg: number | null;
   hrvRange: { low: number; high: number } | null;
-  tomorrowWeather: { code: number; tMax: number; tMin: number } | null;
+  tomorrowWeather: { code: number; tMax: number; tMin: number; sunrise: string | null; sunset: string | null } | null;
   tomorrowEvent: { time: string; title: string } | null;
   sources: string[];
 }
 
-async function gatherTraining(date: string, sources: string[]): Promise<{ today: IcuActivity | null; daysSince: number | null }> {
+interface TrainingSummary { today: IcuActivity | null; daysSince: number | null; weekMinutes: number | null }
+
+async function gatherTraining(date: string, sources: string[]): Promise<TrainingSummary> {
   const acts = await safe('intervals.icu тренування', sources, () => fetchActivities(shiftDate(date, -14), date), [] as IcuActivity[]);
-  if (!acts.length) return { today: null, daysSince: null };
+  if (!acts.length) return { today: null, daysSince: null, weekMinutes: null };
 
   const byDate = (a: IcuActivity) => (a.start_date_local ?? '').slice(0, 10);
+  const weekStart = shiftDate(date, -6);
+  const weekMinutes = Math.round(acts
+    .filter((a) => byDate(a) >= weekStart)
+    .reduce((s, a) => s + (a.moving_time ?? 0), 0) / 60);
+
   const todayActs = acts.filter((a) => byDate(a) === date);
   const today = todayActs.length
     ? todayActs.reduce((longest, a) => ((a.moving_time ?? 0) > (longest.moving_time ?? 0) ? a : longest))
     : null;
-  if (today) return { today, daysSince: 0 };
+  if (today) return { today, daysSince: 0, weekMinutes };
 
   const lastDate = acts.map(byDate).sort().at(-1) ?? null;
   const daysSince = lastDate ? Math.round((Date.parse(`${date}T12:00:00Z`) - Date.parse(`${lastDate}T12:00:00Z`)) / 86_400_000) : null;
-  return { today: null, daysSince };
+  return { today: null, daysSince, weekMinutes };
 }
 
 async function gatherPlanToday(sources: string[]): Promise<{ done: number; total: number }> {
@@ -67,8 +77,9 @@ export async function gatherEveningData(): Promise<EveningData> {
   const sources: string[] = [];
   const icu = intervalsConfigured();
 
-  const [garmin, training, plan, wellness, weather, tomorrowEvent] = await Promise.all([
+  const [garmin, sleep, training, plan, wellness, weather, tomorrowEvent] = await Promise.all([
     safe('Garmin', sources, () => fetchGarminDayStats(date), null as GarminDayStats | null),
+    safe('Garmin сон', sources, () => fetchGarminSleep(date), null as GarminSleep | null),
     gatherTraining(date, sources),
     gatherPlanToday(sources),
     icu ? safe('intervals.icu wellness', sources, () => fetchWellness(shiftDate(date, -30), date), [] as Awaited<ReturnType<typeof fetchWellness>>) : Promise.resolve([]),
@@ -84,8 +95,8 @@ export async function gatherEveningData(): Promise<EveningData> {
   const hrvAvg = (sorted.find((r) => r.id === date) ?? sorted.at(-1))?.hrv ?? null;
 
   return {
-    date, dateLabel, garmin,
-    todayActivity: training.today, daysSinceTraining: training.daysSince,
+    date, dateLabel, garmin, sleep,
+    todayActivity: training.today, daysSinceTraining: training.daysSince, weekMinutes: training.weekMinutes,
     plan,
     rhrRange: typicalRange(wellness.map((r) => r.restingHR)),
     hrvAvg,

@@ -214,11 +214,16 @@ export function parseTrainingStatus(data: J): GarminTrainingStatus | null {
  * для опитування «прокинувся?» без витягання решти брифу щоразу.
  */
 export async function fetchSleepEndReal(date: string): Promise<number | null> {
+  const sleep = await fetchGarminSleep(date);
+  return sleep ? sleep.endLocal - sleep.tzOffsetMs : null;
+}
+
+/** Сон за ніч цієї дати — фази, тривалість, пульс (вечірній звіт, опитування пробудження). */
+export async function fetchGarminSleep(date: string): Promise<GarminSleep | null> {
   if (!garminConfigured()) return null;
   const name = await garminDisplayName();
   const data = await garminGet<J>(`/wellness-service/wellness/dailySleepData/${name}`, { date, nonSleepBufferMinutes: 60 });
-  const sleep = parseSleep(data);
-  return sleep ? sleep.endLocal - sleep.tzOffsetMs : null;
+  return parseSleep(data);
 }
 
 export async function fetchGarminMorning(date: string, yesterday: string): Promise<GarminMorning> {
