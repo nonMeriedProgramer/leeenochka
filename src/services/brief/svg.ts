@@ -11,6 +11,8 @@ export const PAL = {
   bg: '#0b0f14', card: '#151b23', card2: '#1b2330', border: '#222c37',
   text: '#e8eef5', label: '#9aa4b0', muted: '#7d8894', faint: '#4a5561', track: '#232d3a',
   blue: '#4f7cff', green: '#8fe3a0', amber: '#f2b84c', red: '#ef6b6b', violet: '#9b8cf2',
+  // ширша акцентна палітра (вечірній звіт — кожна плитка своїм кольором, не 4 сині поспіль)
+  cyan: '#4fd8e8', pink: '#ff6ec7', teal: '#2dd4bf', gold: '#ffcf4d', lime: '#b8f24c', indigo: '#7c8cff',
   // фази сну (як на референсі: світле пробудження зверху → темний глибокий знизу)
   awake: '#c7cfda', rem: '#8fb0ff', light: '#4f7cff', deep: '#2a45b8',
 };
@@ -80,6 +82,21 @@ export function ringStack(values: Array<{ pct: number | null; color: string }>, 
     return track + val;
   }).join('');
   return img(`<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${circles}</svg>`, size, size);
+}
+
+// ─── Дискретна VU-шкала (як гучність у референсі) — n сегментів, заповнені яскраво ──
+export function levelMeter(pct: number | null, n: number, color: string, w = 260, h = 44): string {
+  const v = pct == null ? 0 : Math.max(0, Math.min(100, pct));
+  const filled = Math.round((v / 100) * n);
+  const gap = 6;
+  const bw = (w - gap * (n - 1)) / n;
+  const bars = Array.from({ length: n }, (_, i) => {
+    const on = i < filled;
+    const x = i * (bw + gap);
+    const bh = h * (0.45 + (i / n) * 0.55); // до країв — вищі стовпчики, як на референсі
+    return `<rect x="${f1(x)}" y="${f1(h - bh)}" width="${f1(bw)}" height="${f1(bh)}" rx="${f1(bw / 2)}" fill="${on ? color : PAL.track}"/>`;
+  }).join('');
+  return img(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${bars}</svg>`, w, h);
 }
 
 // ─── Горизонтальна смуга з кількох суцільних сегментів (розклад стресу за день) ──
