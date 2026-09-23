@@ -321,9 +321,33 @@ async function handleCarryCallback(ctx: any, p: string[]): Promise<void> {
   }
 }
 
+// Останні message_id, які бот сам надіслав у кожен чат — щоб /clean знав, що
+// видаляти. Telegram не дає боту список історії чату, тож запамʼятовуємо самі,
+// перехопивши кожен вихідний виклик API (жодних правок по всіх ctx.reply/sendX).
+const MAX_TRACKED = 200;
+const sentMessages = new Map<number, number[]>();
+function trackSent(chatId: number | undefined, ids: number[]) {
+  if (chatId == null || !ids.length) return;
+  const arr = sentMessages.get(chatId) ?? [];
+  arr.push(...ids);
+  if (arr.length > MAX_TRACKED) arr.splice(0, arr.length - MAX_TRACKED);
+  sentMessages.set(chatId, arr);
+}
+
 export function createBot(token: string) {
   const bot = new Bot(token);
   bot.use(ownerGuard);
+
+  bot.api.config.use(async (prev, method, payload, signal) => {
+    const result = await prev(method, payload, signal);
+    if (result.ok) {
+      const chatId = (payload as { chat_id?: number }).chat_id;
+      const r = result.result as unknown;
+      if (Array.isArray(r)) trackSent(chatId, r.map((m) => (m as { message_id: number }).message_id));
+      else if (r && typeof r === 'object' && 'message_id' in r) trackSent(chatId, [(r as { message_id: number }).message_id]);
+    }
+    return result;
+  });
 
   // ─── /start ───────────────────────────────────────────────────
   bot.command('start', async (ctx) => {
@@ -341,7 +365,8 @@ export function createBot(token: string) {
       '/today — розклад на сьогодні\n' +
       '/week — на тиждень\n' +
       '/reminders — список нагадувань\n\n' +
-      '🎙 Голосові за замовчуванням виконуються як команди. /voice_text — перемкнути на повну розшифровку без дій, /voice_summary — на вижимку ~25%, /voice_ai — повернути команди.',
+      '🎙 Голосові за замовчуванням виконуються як команди. /voice_text — перемкнути на повну розшифровку без дій, /voice_summary — на вижимку ~25%, /voice_ai — повернути команди.\n\n' +
+      '🧹 /clean [N] — прибрати мої останні N повідомлень із цього чату (за замовчуванням 20).',
     );
   });
 
@@ -500,6 +525,25 @@ export function createBot(token: string) {
   // сам чат. Тож питаємо бота прямо в тій групі, куди його щойно додали.
   bot.command('chatid', async (ctx) => {
     await ctx.reply(`chat id: <code>${ctx.chat.id}</code>\nтип: ${ctx.chat.type}`, { parse_mode: 'HTML' });
+  });
+
+  // ─── /clean — прибрати свої останні повідомлення в цьому чаті ──────────
+  // Telegram не дає боту списку історії чату, тож видаляємо з того, що сам
+  // запамʼятав (trackSent вище). Найновіші повідомлення — на дні списку.
+  bot.command('clean', async (ctx) => {
+    const n = Math.max(1, Math.min(MAX_TRACKED, Number(ctx.match) || 20));
+    const ids = (sentMessages.get(ctx.chat.id) ?? []).slice(-n);
+    if (!ids.length) { await ctx.reply('Нема що чистити — ще нічого не запамʼятав у цьому чаті.'); return; }
+
+    let ok = 0;
+    for (const id of ids) {
+      try { await ctx.api.deleteMessage(ctx.chat.id, id); ok++; } catch { /* старіше 48г чи вже видалено — пропускаємо */ }
+    }
+    sentMessages.set(ctx.chat.id, (sentMessages.get(ctx.chat.id) ?? []).filter((id) => !ids.includes(id)));
+
+    const report = await ctx.reply(`🧹 Прибрав ${ok} із ${ids.length} своїх повідомлень.`);
+    // Сам звіт теж почистимо за хвилину, щоб не лишався сміттям.
+    setTimeout(() => { ctx.api.deleteMessage(ctx.chat.id, report.message_id).catch(() => {}); }, 60_000);
   });
 
   // ─── Режим голосових — перемикачі ───────────────────────────────────────
