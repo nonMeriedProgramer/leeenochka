@@ -71,6 +71,13 @@ export async function chatProvider(): Promise<{ client: OpenAI; model: string; s
     : { client: freemodel(), model: FALLBACK_MODEL, system };
 }
 
+/** Той самий клієнт/модель, але без важкого system-промпту агента (розкладу тощо) — для разових текстових задач типу вижимки. */
+export function completionProvider(): { client: OpenAI; model: string } {
+  return process.env.GROQ_API_KEY
+    ? { client: groq(), model: CHAT_MODEL }
+    : { client: freemodel(), model: FALLBACK_MODEL };
+}
+
 // fire-and-forget: лог повідомлення не має блокувати відповідь
 export function saveMessage(role: 'user' | 'assistant', content: string) {
   db.run('INSERT INTO messages (role, content) VALUES ($1, $2)', [role, content])

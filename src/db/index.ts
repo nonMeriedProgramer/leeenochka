@@ -164,16 +164,6 @@ export async function initDb(): Promise<void> {
       posted_at     TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
-    -- Оголошення OLX, які вже бачили (services/olx/watch.ts). Сортування OLX
-    -- «найновіші» насправді за часом підняття, тож новизну тримаємо тут, за id.
-    CREATE TABLE IF NOT EXISTS olx_seen (
-      offer_id BIGINT PRIMARY KEY,
-      query    TEXT NOT NULL,
-      title    TEXT,
-      posted   BOOLEAN NOT NULL DEFAULT false,
-      seen_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-
     -- Ротація ранкових привітань/цитат у брифі (брief/phrases.ts) — коли кожну
     -- фразу востаннє показували, щоб не повторювати частіше за вікно кулдауну.
     CREATE TABLE IF NOT EXISTS brief_phrases (
@@ -200,7 +190,6 @@ export async function initDb(): Promise<void> {
     ALTER TABLE training_posts    ENABLE ROW LEVEL SECURITY;
     ALTER TABLE garmin_auth       ENABLE ROW LEVEL SECURITY;
     ALTER TABLE brief_phrases     ENABLE ROW LEVEL SECURITY;
-    ALTER TABLE olx_seen          ENABLE ROW LEVEL SECURITY;
   `);
   console.log('✅ DB ready (Postgres)');
 }

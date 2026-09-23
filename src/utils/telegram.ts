@@ -16,3 +16,12 @@ export async function downloadVoice(api: Api, fileId: string): Promise<string> {
   await pipeline(res.body as never, writer);
   return filePath;
 }
+
+const TELEGRAM_MESSAGE_LIMIT = 3900; // з запасом від ліміту Telegram 4096
+
+/** Довгий текст (напр. повна розшифровка) — одним чи кількома повідомленнями поспіль. */
+export async function sendLong(api: Api, chatId: number, text: string): Promise<void> {
+  for (let i = 0; i < text.length; i += TELEGRAM_MESSAGE_LIMIT) {
+    await api.sendMessage(chatId, text.slice(i, i + TELEGRAM_MESSAGE_LIMIT));
+  }
+}

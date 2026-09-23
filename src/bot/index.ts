@@ -5,14 +5,13 @@ import { gatherBriefData } from '../services/brief/data.js';
 import { renderBrief, sendBriefAlbum, sendMorningBrief } from '../services/brief/index.js';
 import { garminCheck } from '../services/garmin/client.js';
 import { probeGarminDay, rawGarminSample, RAW_KEYS } from '../services/garmin/probe.js';
-import { fetchOffers } from '../services/olx/api.js';
-import { SEARCHES, selectHits, runOlxWatch, olxWatchEnabled } from '../services/olx/watch.js';
 import { runAgent } from '../ai/agent.js';
 import { saveMessage } from '../ai/claude.js';
 import { transcribeAudio } from '../transcription/whisper.js';
+import { summarizeText } from '../transcription/summarize.js';
 import { isCalendarConnected, getUpcomingEvents } from '../services/calendar/index.js';
 import { getReminders, isRemindersConnected } from '../services/reminders/index.js';
-import { downloadVoice } from '../utils/telegram.js';
+import { downloadVoice, sendLong } from '../utils/telegram.js';
 import { saveAppleCredentials } from '../auth/tokens.js';
 import db from '../db/index.js';
 import {
@@ -35,6 +34,11 @@ let pendingOptions: Array<{ label: string; execute: () => Promise<string> }> | n
 let pendingChecklist: { items: Array<{ label: string; create: () => Promise<string> }>; selected: boolean[] } | null = null;
 let pendingCarry: { items: Array<{ id: number; label: string }>; selected: boolean[]; toWs: string } | null = null; // ↪️ перенос пунктів плану
 let pendingGymPick: { selected: boolean[]; ws: string } | null = null; // 🏋️ вибір днів залу на тиждень
+
+// Що робити з голосовими: 'agent' (за замовчуванням) — розпізнати й виконати як команду,
+// як і раніше; 'text'/'summary' — новий тул: лише текст назад, жодних дій бота.
+type VoiceMode = 'agent' | 'text' | 'summary';
+let voiceMode: VoiceMode = 'agent';
 
 // Кожне створення реєструє свій undo під унікальним id → кнопка «Скасувати» відміняє саме свою подію, а не останню
 const pendingUndos = new Map<string, () => Promise<string>>();
@@ -336,7 +340,8 @@ export function createBot(token: string) {
       '/setup — підключити Apple Calendar\n' +
       '/today — розклад на сьогодні\n' +
       '/week — на тиждень\n' +
-      '/reminders — список нагадувань',
+      '/reminders — список нагадувань\n\n' +
+      '🎙 Голосові за замовчуванням виконуються як команди. /voice_text — перемкнути на повну розшифровку без дій, /voice_summary — на вижимку ~25%, /voice_ai — повернути команди.',
     );
   });
 
@@ -497,38 +502,22 @@ export function createBot(token: string) {
     await ctx.reply(`chat id: <code>${ctx.chat.id}</code>\nтип: ${ctx.chat.type}`, { parse_mode: 'HTML' });
   });
 
-  // ─── /olx_check — чи пускає OLX запити з цього сервера ─────────────────
-  // Головна перевірка: CloudFront перед OLX ріже IP дата-центрів, і локально
-  // робочий код може отримати 403 саме з Render. Нічого не постить.
-  bot.command('olx_check', async (ctx) => {
-    await ctx.reply('⏳ Перевіряю OLX...');
-    const lines = [`Пошуків у коді: ${SEARCHES.length}`, `Група: ${olxWatchEnabled() ? '✓ задана' : '✗ OLX_CHANNEL_ID не задано'}`];
-    for (const s of SEARCHES) {
-      try {
-        const offers = await fetchOffers(s);
-        const hits = selectHits(offers, s);
-        const price = s.priceFrom != null || s.priceTo != null ? `, ціна ${s.priceFrom ?? '—'}–${s.priceTo ?? '—'}` : '';
-        lines.push(`«${s.query}» [${s.words.join(', ')}${price}]: ${offers.length} оголошень → ${hits.length} збігів`);
-        if (hits[0]) lines.push(`   напр.: ${hits[0].offer.title.slice(0, 60)} — ${hits[0].offer.price?.label ?? 'без ціни'}`);
-      } catch (e) {
-        lines.push(`«${s.query}»: ✗ ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-    await ctx.reply(`🔧 olx_check\n${lines.join('\n')}`);
-  });
-
-  // ─── /olx_now — ручний прогін моніторингу з постингом у групу ──────────
-  bot.command('olx_now', async (ctx) => {
-    await ctx.reply('⏳ Тягну OLX і публікую нові...');
-    try {
-      const r = await runOlxWatch(ctx.api);
-      const seeded = r.seeded ? `\nЗасіяно без поста (перший прогін): ${r.seeded}` : '';
-      const errors = r.errors.length ? `\n\nПроблеми:\n${r.errors.map((e) => `• ${e}`).join('\n')}` : '';
-      await ctx.reply(`✅ Перевірено ${r.checked} оголошень · запощено ${r.posted}${seeded}${errors}`.slice(0, 3500));
-    } catch (e) {
-      await ctx.reply(`❌ OLX-прогін впав:\n${(e instanceof Error ? e.message : String(e)).slice(0, 800)}`);
-    }
-  });
+  // ─── Режим голосових — перемикачі ───────────────────────────────────────
+  // За замовчуванням (agent) — розшифровка одразу йде асистенту як команда,
+  // як і раніше. Ці два перемикають на просту розшифровку: /voice_text — повний
+  // текст, /voice_summary — вижимка ~25%. /voice_ai — назад до команд.
+  const VOICE_MODE_LABEL: Record<VoiceMode, string> = {
+    agent: '🤖 команди асистенту (як і раніше)',
+    text: '📝 повний текст, без дій бота',
+    summary: '✂️ вижимка ~25%, без дій бота',
+  };
+  const setVoiceMode = (mode: VoiceMode) => async (ctx: any) => {
+    voiceMode = mode;
+    await ctx.reply(`🎙 Голосові тепер → ${VOICE_MODE_LABEL[mode]}`);
+  };
+  bot.command('voice_ai', setVoiceMode('agent'));
+  bot.command('voice_text', setVoiceMode('text'));
+  bot.command('voice_summary', setVoiceMode('summary'));
 
   // ─── /mcp_url — адреса для claude.ai (Customize → Connectors → +) ──────
   // Секрет тільки тут, у приваті, а не в логах Render чи в репо.
@@ -654,15 +643,36 @@ export function createBot(token: string) {
   // ─── Голос ────────────────────────────────────────────────────
   bot.on('message:voice', async (ctx) => {
     const wait = await ctx.reply('🎙 Транскрибую…');
+    let text: string;
     try {
       const file = await downloadVoice(ctx.api, ctx.message.voice.file_id);
-      const text = await transcribeAudio(file);
-      await ctx.api.editMessageText(ctx.chat.id, wait.message_id, `📝 "${text}"`);
-      await handleInput(ctx, text);
+      text = await transcribeAudio(file);
     } catch (e) {
       console.error('Voice transcription failed:', e);
-      await ctx.api.editMessageText(ctx.chat.id, wait.message_id, '❌ Не вдалось розпізнати голос.');
+      await ctx.api.editMessageText(ctx.chat.id, wait.message_id, '❌ Не вдалось розпізнати голос.').catch(() => {});
+      return;
     }
+
+    if (voiceMode === 'text') {
+      await ctx.api.deleteMessage(ctx.chat.id, wait.message_id).catch(() => {});
+      await sendLong(ctx.api, ctx.chat.id, text.trim() || '(порожньо)');
+      return;
+    }
+    if (voiceMode === 'summary') {
+      await ctx.api.editMessageText(ctx.chat.id, wait.message_id, '✂️ Стискаю…').catch(() => {});
+      try {
+        const short = await summarizeText(text);
+        await ctx.api.editMessageText(ctx.chat.id, wait.message_id, `✂️ ${short}`);
+      } catch (e) {
+        console.error('Voice summary failed:', e);
+        await ctx.api.editMessageText(ctx.chat.id, wait.message_id, `❌ Вижимка не вийшла, ось повний текст:\n\n${text}`.slice(0, 4000)).catch(() => {});
+      }
+      return;
+    }
+
+    // agent — як і раніше: показуємо розпізнане й виконуємо як команду.
+    await ctx.api.editMessageText(ctx.chat.id, wait.message_id, `📝 "${text}"`);
+    await handleInput(ctx, text);
   });
 
   return bot;
