@@ -10,6 +10,7 @@ export const C = {
   bg: '#000000', tile: '#0b0b0d', text: '#ffffff', dim: '#8e8e93', track: '#2c2c2e',
   green: '#30d158', yellow: '#ffd60a', orange: '#ff9f0a', red: '#ff453a', pink: '#ff375f',
   purple: '#bf5af2', blue: '#0a84ff', cyan: '#64d2ff', teal: '#40cbe0', mint: '#66d4cf',
+  deepNight: '#1c1c4a', dawn: '#ff9f6b',
 };
 
 const f1 = (n: number) => Math.round(n * 10) / 10;
@@ -69,6 +70,48 @@ export function dialScale(pct: number | null, w: number, h: number): string {
   }).join('');
   const x = pct == null ? null : 2 + (clamp(pct) / 100) * (w - 4);
   return svg(w, h, `${ticks}${x != null ? `<rect x="${f1(x - 1.5)}" y="0" width="3" height="${h}" rx="1.5" fill="${C.red}"/>` : ''}`);
+}
+
+/**
+ * Кільце з числом усередині. Текст — HTML-шаром поверх SVG: у data-URI
+ * немає доступу до шрифтів, кирилиця й цифри там не відрендеряться.
+ */
+export function ringGauge(pct: number | null, size: number, color: string, label = ''): string {
+  const c = size / 2;
+  const stroke = Math.round(size * 0.13);
+  const r = c - stroke / 2 - 1;
+  const circ = 2 * Math.PI * r;
+  const v = pct == null ? 0 : clamp(pct);
+  const ring = svg(size, size, `
+    <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${C.track}" stroke-width="${stroke}"/>
+    ${v > 0 ? `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linecap="round"
+      stroke-dasharray="${f1((circ * v) / 100)} ${f1(circ)}" transform="rotate(-90 ${c} ${c})"/>` : ''}
+  `);
+  if (!label) return ring;
+  return `<div style="display:flex;position:relative;width:${size}px;height:${size}px;">${ring}
+    <div style="display:flex;position:absolute;top:0;left:0;width:${size}px;height:${size}px;align-items:center;justify-content:center;font-size:${Math.round(size * 0.26)}px;font-weight:700;color:${C.text};">${label}</div>
+  </div>`;
+}
+
+/**
+ * Кілька підписаних смужок одна під одною (фактори готовності).
+ * Підписи — HTML-шаром, смужки — SVG; разом складаються тут, бо в SVG
+ * data-URI кирилиця не відрендериться.
+ */
+export function levelBars(items: Array<{ label: string; pct: number | null; color: string }>, w: number): string {
+  if (!items.length) return `<div style="display:flex;width:${w}px;height:86px;"></div>`;
+  const barW = Math.round(w * 0.5);
+  const rows = items.slice(0, 6).map((it) => {
+    const v = it.pct == null ? 0 : clamp(it.pct);
+    const bar = svg(barW, 8, `<rect x="0" y="0" width="${barW}" height="8" rx="4" fill="${C.track}"/>
+      ${v > 0 ? `<rect x="0" y="0" width="${f1(Math.max(8, (barW * v) / 100))}" height="8" rx="4" fill="${it.color}"/>` : ''}`);
+    return `<div style="display:flex;flex-direction:row;align-items:center;width:${w}px;height:19px;">
+      <div style="display:flex;width:${w - barW - 40}px;font-size:13px;color:${C.dim};">${it.label}</div>
+      ${bar}
+      <div style="display:flex;width:36px;justify-content:flex-end;font-size:13px;color:${C.text};">${it.pct == null ? '—' : Math.round(it.pct)}</div>
+    </div>`;
+  }).join('');
+  return `<div style="display:flex;flex-direction:column;width:${w}px;">${rows}</div>`;
 }
 
 /** Чотири кільця з відсотками поруч — «фази сну» у референсі. */

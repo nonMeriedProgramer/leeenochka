@@ -1,189 +1,155 @@
-// ─── Панель 1: Сон ────────────────────────────────────────────────────
+// ─── Ранкова панель 1: Сон ─────────────────────────────────────────────
+// Та сама мова, що й вечірній звіт: чорна сітка віджетів, у кожній плитці
+// своя форма графіка. Дані — Garmin напряму; якщо їх нема, плитки чесно
+// порожні, а тривалість/оцінка беруться з intervals.icu.
 import type { BriefData } from './data.js';
-import type { GarminSleep, StageInfo } from '../garmin/morning.js';
-import { PAL, columns, gauge, hypnogram, ring, type Stage } from './svg.js';
-import {
-  DAY_SHORT, INNER, badge, card, cardTitle, dur, esc, gap, header, hhmmLocal, qualifierUa,
-  renderPanel, row, scoreQualifier, tile,
-} from './ui.js';
+import { columns, hypnogram, PAL } from './svg.js';
+import { dur, hhmmLocal } from './ui.js';
 import { shiftDate } from './stats.js';
+import { ART, ART_WIDE, center, group, legend, renderGrid, scale, tag, tile, val, type Tile } from '../dashboard/grid.js';
+import { C, capsules, dialScale, gradientTrack, quadRings, ringGauge, waveform } from '../dashboard/widgets.js';
 
-const STAGE_UA: Record<Stage, string> = { awake: 'Пробудження', rem: 'REM', light: 'Легкий', deep: 'Глибокий' };
-const STAGE_COLOR: Record<Stage, string> = { awake: PAL.awake, rem: PAL.rem, light: PAL.light, deep: PAL.deep };
+const pct = (v: number | null | undefined, max: number): number | null =>
+  v == null ? null : Math.max(0, Math.min(100, (v / max) * 100));
 
-function weekStrip(d: BriefData, todayScore: number | null): string {
-  const days = Array.from({ length: 7 }, (_, i) => shiftDate(d.date, i - 6));
-  const cells = days.map((day) => {
-    const isToday = day === d.date;
-    const w = d.wellness.find((r) => r.id === day);
-    const score = isToday && todayScore != null ? todayScore : (w?.sleepScore ?? null);
-    const color = qualifierUa(scoreQualifier(score)).color;
-    const dow = DAY_SHORT[new Date(`${day}T12:00:00Z`).getUTCDay()];
-    return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;">
-      <div style="display:flex;position:relative;width:88px;height:88px;">
-        ${ring(score, color === PAL.muted ? PAL.faint : color, 88, 9, isToday)}
-        <div style="display:flex;position:absolute;top:0;left:0;width:88px;height:88px;align-items:center;justify-content:center;font-size:26px;font-weight:700;color:${score == null ? PAL.faint : PAL.text};">${score == null ? '–' : Math.round(score)}</div>
-      </div>
-      <div style="display:flex;margin-top:8px;font-size:22px;color:${isToday ? PAL.text : PAL.muted};">${dow}</div>
-    </div>`;
-  });
-  return `<div style="display:flex;flex-direction:row;">${cells.join('')}</div>`;
-}
-
-function scoreBlock(score: number | null, qualifier: string | null): string {
-  const q = qualifierUa(qualifier ?? scoreQualifier(score));
-  return `<div style="display:flex;position:relative;width:300px;height:300px;">
-    ${gauge(score, q.color === PAL.muted ? PAL.faint : PAL.blue, 300, 26)}
-    <div style="display:flex;position:absolute;top:0;left:0;width:300px;height:300px;flex-direction:column;align-items:center;justify-content:center;">
-      <div style="display:flex;font-size:96px;font-weight:700;">${score == null ? '–' : Math.round(score)}</div>
-      <div style="display:flex;margin-top:4px;">${badge(q.text, q.color)}</div>
-    </div>
-  </div>`;
-}
-
-function statLine(label: string, value: string, extra = ''): string {
-  return `<div style="display:flex;flex-direction:column;">
-    <div style="display:flex;font-size:24px;color:${PAL.label};">${esc(label)}</div>
-    <div style="display:flex;flex-direction:row;align-items:center;margin-top:2px;">
-      <div style="display:flex;font-size:40px;font-weight:700;">${esc(value)}</div>
-      ${extra ? `<div style="display:flex;margin-left:14px;">${extra}</div>` : ''}
-    </div>
-  </div>`;
-}
-
-function hypnoBlock(s: GarminSleep): string {
-  const chartW = INNER - 64 - 150;
-  const chartH = 240;
-  const labels = (['awake', 'rem', 'light', 'deep'] as Stage[]).map((st) => `
-    <div style="display:flex;height:${chartH / 4}px;align-items:center;font-size:22px;color:${PAL.label};">
-      <div style="display:flex;width:14px;height:14px;border-radius:7px;background:${STAGE_COLOR[st]};margin-right:10px;"></div>${STAGE_UA[st]}
-    </div>`).join('');
-
-  const t0 = s.segments[0].start;
-  const t1 = s.segments[s.segments.length - 1].end;
-  const ticks: string[] = [];
-  const hourMs = 3_600_000;
-  // перша повна година за локальним часом після засинання
-  let t = Math.ceil((t0 + s.tzOffsetMs) / hourMs) * hourMs - s.tzOffsetMs;
-  for (; t < t1; t += hourMs) {
-    const x = ((t - t0) / (t1 - t0)) * chartW;
-    if (x < 14 || x > chartW - 14) continue;
-    const label = new Date(t + s.tzOffsetMs).toISOString().slice(11, 13);
-    ticks.push(`<div style="display:flex;position:absolute;left:${Math.round(x - 20)}px;top:0;width:40px;justify-content:center;font-size:20px;color:${PAL.muted};">${label}</div>`);
+// Коротко: у плитку 247px поруч зі значенням «відмінно/посередньо» не влазить.
+function qualityTag(q: string | null, short = false): { text: string; color: string } {
+  switch (q) {
+    case 'EXCELLENT': return { text: short ? 'топ' : 'відмінно', color: C.green };
+    case 'GOOD': return { text: 'добре', color: C.green };
+    case 'FAIR': return { text: short ? 'норм' : 'посередньо', color: C.yellow };
+    case 'POOR': return { text: 'мало', color: C.red };
+    default: return { text: '', color: C.dim };
   }
-
-  return `<div style="display:flex;flex-direction:row;">
-    <div style="display:flex;flex-direction:column;width:150px;">${labels}</div>
-    <div style="display:flex;flex-direction:column;">
-      ${hypnogram(s.segments, chartW, chartH)}
-      <div style="display:flex;position:relative;width:${chartW}px;height:30px;margin-top:6px;">${ticks.join('')}</div>
-    </div>
-  </div>`;
 }
 
-function stageCell(st: Stage, info: StageInfo | null, seconds: number, extra = ''): string {
-  const q = info?.qualifier ? qualifierUa(info.qualifier) : null;
-  const norm = info?.optimalLow != null && info.optimalHigh != null
-    ? ` · норма ${Math.round(info.optimalLow)}–${Math.round(info.optimalHigh)}%` : '';
-  const pct = info?.pct != null ? `${Math.round(info.pct)}%${norm}` : extra;
-  return `<div style="display:flex;flex-direction:column;flex:1;background:${PAL.card2};border-radius:20px;padding:18px 20px;">
-    <div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;">
-      <div style="display:flex;flex-direction:row;align-items:center;font-size:24px;color:${PAL.label};">
-        <div style="display:flex;width:16px;height:16px;border-radius:8px;background:${STAGE_COLOR[st]};margin-right:10px;"></div>${STAGE_UA[st]}
-      </div>
-      ${q ? badge(q.text, q.color) : ''}
-    </div>
-    <div style="display:flex;font-size:36px;font-weight:700;margin-top:6px;">${dur(seconds)}</div>
-    <div style="display:flex;font-size:21px;color:${PAL.muted};margin-top:2px;">${esc(pct)}</div>
-  </div>`;
-}
-
-function garminBody(d: BriefData, s: GarminSleep): string {
-  const dq = s.durationQualifier ? qualifierUa(s.durationQualifier) : null;
-  const need = s.needMin != null ? dur(s.needMin * 60) : '—';
-  const nextNeed = s.nextNeedMin != null && s.nextNeedMin !== s.needMin ? `завтра ${dur(s.nextNeedMin * 60)}` : '';
-
-  const hero = card(row([
-    scoreBlock(s.score, s.qualifier),
-    `<div style="display:flex;flex-direction:column;justify-content:space-between;flex:1;padding:6px 0;">
-      ${statLine('Тривалість', dur(s.totalSec), dq ? badge(dq.text, dq.color) : '')}
-      ${statLine('Відбій – підйом', `${hhmmLocal(s.startLocal)} – ${hhmmLocal(s.endLocal)}`)}
-      ${statLine('Потреба у сні', need, nextNeed ? `<div style="display:flex;font-size:22px;color:${PAL.muted};">${esc(nextNeed)}</div>` : '')}
-      <div style="display:flex;font-size:23px;color:${PAL.muted};">Пробуджень ${s.awakeCount ?? 0} · неспокій ${s.restlessMoments ?? 0} разів</div>
-    </div>`,
-  ], 36));
-
-  const stages = card(`
-    ${cardTitle('Фази сну', `${dur(s.totalSec)} уві сні`)}
-    ${s.segments.length ? hypnoBlock(s) : `<div style="display:flex;font-size:24px;color:${PAL.muted};">Графік фаз недоступний</div>`}
-    ${gap(18)}
-    ${row([stageCell('deep', s.deep, s.deep.seconds), stageCell('rem', s.rem, s.rem.seconds)], 16)}
-    ${gap(16)}
-    ${row([stageCell('light', s.light, s.light.seconds), stageCell('awake', null, s.awakeSec, 'не рахується в сон')], 16)}
-  `);
-
-  const hrvTile = s.hrvAvg != null ? tile('HRV за ніч', `${Math.round(s.hrvAvg)} мс`) : tile('HRV за ніч', '—');
-  const bottom = row([
-    tile('Пульс уві сні', s.avgHr != null ? `${Math.round(s.avgHr)}` : '—', 'уд/хв'),
-    hrvTile,
-    tile('SpO2', s.spo2Avg != null ? `${Math.round(s.spo2Avg)}%` : '—', 'середнє'),
-    tile('Дихання', s.respirationAvg != null ? `${Math.round(s.respirationAvg)}` : '—', 'вдихів/хв'),
-  ], 16);
-
-  return `${hero}${gap(22)}${stages}${gap(22)}${bottom}`;
-}
-
-function fallbackBody(d: BriefData): string {
-  const st = d.stats;
-  const score = st?.sleepScore?.value ?? null;
-  const q = scoreQualifier(score);
-  const delta = st?.sleepScore?.delta;
-  const hero = card(row([
-    scoreBlock(score, q),
-    `<div style="display:flex;flex-direction:column;justify-content:center;flex:1;">
-      ${statLine('Тривалість', st?.sleepHours != null ? dur(st.sleepHours * 3600) : '—')}
-      ${gap(18)}
-      ${statLine('Від твоєї норми', delta != null ? `${delta > 0 ? '+' : ''}${Math.round(delta)}` : '—')}
-      ${gap(18)}
-      <div style="display:flex;font-size:23px;color:${PAL.muted};">Джерело: intervals.icu</div>
-    </div>`,
-  ], 36));
-
-  const days = Array.from({ length: 7 }, (_, i) => shiftDate(d.date, i - 6));
-  const hours = days.map((day) => {
-    const secs = d.wellness.find((r) => r.id === day)?.sleepSecs;
-    return secs ? Math.round((secs / 3600) * 10) / 10 : null;
-  });
-  const chartW = INNER - 64;
-  const week = card(`
-    ${cardTitle('Сон за 7 днів', 'години')}
-    ${columns(hours, [PAL.light], chartW, 260, Math.max(9, ...hours.map((h) => h ?? 0)))}
-    <div style="display:flex;flex-direction:row;margin-top:10px;">
-      ${days.map((day, i) => `<div style="display:flex;flex-direction:column;align-items:center;flex:1;font-size:21px;color:${PAL.muted};">
-        <div style="display:flex;color:${PAL.text};">${hours[i] ?? '–'}</div>
-        <div style="display:flex;">${DAY_SHORT[new Date(`${day}T12:00:00Z`).getUTCDay()]}</div></div>`).join('')}
-    </div>
-    ${gap(16)}
-    <div style="display:flex;font-size:23px;color:${PAL.amber};">${d.garmin.fatal
-      ? 'Фази сну недоступні: Garmin зараз не відповідає'
-      : 'Фази сну ще не прийшли — синхронізуй годинник і надішли /brief'}</div>
-  `);
-
-  const bottom = row([
-    tile('HRV', st?.hrv ? `${Math.round(st.hrv.value)} мс` : '—'),
-    tile('Пульс спокою', st?.restingHr ? `${Math.round(st.restingHr.value)}` : '—', 'уд/хв'),
-  ], 16);
-  return `${hero}${gap(22)}${week}${gap(22)}${bottom}`;
+/** Плитка фази: кільце з відсотком і норма знизу. */
+function stageTile(label: string, color: string, seconds: number | null, stage: { pct: number | null; optimalLow: number | null; optimalHigh: number | null; qualifier: string | null } | null): Tile {
+  const q = qualityTag(stage?.qualifier ?? null, true);
+  const norm = stage?.optimalLow != null && stage.optimalHigh != null
+    ? `норма ${Math.round(stage.optimalLow)}–${Math.round(stage.optimalHigh)}%` : '';
+  return tile(
+    val(seconds != null ? dur(seconds, true) : '—', label, C.text, 30) + tag(q.text, q.color),
+    center(ringGauge(stage?.pct ?? null, 78, color, stage?.pct != null ? `${Math.round(stage.pct)}%` : '')),
+    scale([norm]),
+  );
 }
 
 export async function renderSleepPanel(d: BriefData): Promise<Buffer> {
   const s = d.garmin.sleep;
-  const body = s ? garminBody(d, s) : fallbackBody(d);
-  return renderPanel(`
-    ${header('Сон', d.dateLabel)}
-    ${gap(24)}
-    ${weekStrip(d, s?.score ?? null)}
-    ${gap(24)}
-    ${body}
-  `);
+  const tiles: Tile[] = [];
+  const score = s?.score ?? d.stats?.sleepScore?.value ?? null;
+  const totalSec = s?.totalSec ?? (d.stats?.sleepHours != null ? d.stats.sleepHours * 3600 : null);
+
+  // 1. Оцінка сну
+  const sq = qualityTag(s?.qualifier ?? (score == null ? null : score >= 90 ? 'EXCELLENT' : score >= 80 ? 'GOOD' : score >= 60 ? 'FAIR' : 'POOR'));
+  tiles.push(tile(
+    val(score != null ? String(Math.round(score)) : '—', 'оцінка') + tag(sq.text, sq.color),
+    center(ringGauge(score, 84, sq.color === C.dim ? C.track : sq.color)),
+    scale([s ? 'Garmin' : 'intervals.icu']),
+  ));
+
+  // 2. Тривалість проти потреби — капсули
+  const dq = qualityTag(s?.durationQualifier ?? null);
+  tiles.push(tile(
+    group(val(totalSec != null ? String(Math.floor(totalSec / 3600)) : '—', 'год', C.text),
+      totalSec != null ? val(String(Math.round((totalSec % 3600) / 60)), 'хв', C.text, 26) : '') + tag(dq.text, dq.color),
+    capsules(s?.needMin ? pct(totalSec, s.needMin * 60) : pct(totalSec, 8 * 3600), 8, ART, 44, C.cyan),
+    scale([s?.needMin ? `потреба ${dur(s.needMin * 60)}` : 'потреба 8 год']),
+  ));
+
+  // 3. Відбій і підйом — смужка ночі
+  tiles.push(tile(
+    val(s ? hhmmLocal(s.startLocal) : '—', s ? `– ${hhmmLocal(s.endLocal)}` : 'нема даних') + tag('ніч', C.purple),
+    gradientTrack(s ? 50 : null, ART, 42, C.deepNight, C.dawn),
+    scale([s ? 'відбій' : '', s ? 'підйом' : '']),
+  ));
+
+  // 4. Неспокій за ніч
+  tiles.push(tile(
+    val(s?.awakeCount != null ? String(s.awakeCount) : '—', 'пробуджень')
+      + tag(s?.restlessMoments != null ? `${s.restlessMoments} рухів` : '', C.dim),
+    waveform(ART, 50, C.orange, s != null),
+    scale([s?.awakeSec ? `неспання ${dur(s.awakeSec)}` : '']),
+  ));
+
+  // 5. Гіпнограма — на дві колонки
+  tiles.push(tile(
+    val('Фази', s ? dur(s.totalSec) : '', C.text, 30) + tag('уві сні', C.dim),
+    s?.segments.length
+      ? hypnogram(s.segments, ART_WIDE, 74)
+      : `<div style="display:flex;width:${ART_WIDE}px;height:74px;"></div>`,
+    legend([['неспання', PAL.awake], ['REM', PAL.rem], ['легкий', PAL.light], ['глибокий', PAL.deep]]),
+    2,
+  ));
+
+  // 6-8. Фази
+  tiles.push(stageTile('глибокий', C.blue, s?.deep.seconds ?? null, s?.deep ?? null));
+  tiles.push(stageTile('REM', C.purple, s?.rem.seconds ?? null, s?.rem ?? null));
+  tiles.push(stageTile('легкий', C.cyan, s?.light.seconds ?? null, s?.light ?? null));
+
+  // 9. Пульс уві сні
+  const hrLow = 40;
+  const hrHigh = 90;
+  tiles.push(tile(
+    val(s?.avgHr != null ? String(Math.round(s.avgHr)) : '—', 'уд/хв') + tag('уві сні', C.red),
+    dialScale(s?.avgHr != null ? pct(s.avgHr - hrLow, hrHigh - hrLow) : null, ART, 48),
+    scale([String(hrLow), String(hrHigh)]),
+  ));
+
+  // 10. HRV за ніч
+  const hrv = s?.hrvAvg ?? d.garmin.hrv?.lastNight ?? d.stats?.hrv?.value ?? null;
+  const hrvRange = d.garmin.hrv?.low != null && d.garmin.hrv.high != null
+    ? { low: d.garmin.hrv.low, high: d.garmin.hrv.high } : null;
+  tiles.push(tile(
+    val(hrv != null ? String(Math.round(hrv)) : '—', 'мс')
+      + tag(hrv == null || !hrvRange ? '' : hrv >= hrvRange.low ? 'у нормі' : 'нижче', hrvRange && hrv != null && hrv >= hrvRange.low ? C.green : C.orange),
+    dialScale(hrv != null && hrvRange ? pct(hrv - hrvRange.low + 10, (hrvRange.high - hrvRange.low) + 20) : null, ART, 48),
+    scale([hrvRange ? `норма ${hrvRange.low}–${hrvRange.high}` : 'HRV']),
+  ));
+
+  // 11. Заряд тіла за ніч
+  tiles.push(tile(
+    val(s?.bodyBatteryChange != null ? `+${s.bodyBatteryChange}` : '—', 'за ніч', C.green)
+      + tag(d.garmin.bodyBatteryWake != null ? `${d.garmin.bodyBatteryWake} зранку` : '', C.dim),
+    gradientTrack(d.garmin.bodyBatteryWake ?? null, ART, 42, C.red, C.green),
+    scale(['0', '100']),
+  ));
+
+  // 12. SpO2 і дихання
+  tiles.push(tile(
+    group(val(s?.spo2Avg != null ? String(Math.round(s.spo2Avg)) : '—', '%', C.text, 34),
+      s?.respirationAvg != null ? val(String(Math.round(s.respirationAvg)), 'вд/хв', C.text, 24) : '') + tag('SpO2', C.cyan),
+    waveform(ART, 50, C.cyan, s?.spo2Avg != null),
+    scale(['кисень і дихання уві сні']),
+  ));
+
+  // 13. Фази одним поглядом — чотири кільця
+  tiles.push(tile(
+    val('Розподіл', '', C.text, 30) + tag('фази', C.dim),
+    quadRings([
+      { pct: s?.deep.pct ?? null, color: C.blue },
+      { pct: s?.light.pct ?? null, color: C.cyan },
+      { pct: s?.rem.pct ?? null, color: C.purple },
+      { pct: s ? (s.awakeSec / Math.max(1, s.totalSec)) * 100 : null, color: C.orange },
+    ], 50),
+    legend([['глиб', C.blue], ['легк', C.cyan], ['REM', C.purple], ['неспан', C.orange]]),
+  ));
+
+  // 14. Тиждень сну — стовпчики годин (на дві колонки)
+  const days = Array.from({ length: 7 }, (_, i) => shiftDate(d.date, i - 6));
+  const hours = days.map((day) => {
+    const secs = day === d.date && s ? s.totalSec : d.wellness.find((r) => r.id === day)?.sleepSecs;
+    return secs ? Math.round((secs / 3600) * 10) / 10 : null;
+  });
+  const avg = hours.filter((h): h is number => h != null);
+  tiles.push(tile(
+    val(avg.length ? (avg.reduce((a, b) => a + b, 0) / avg.length).toFixed(1).replace('.', ',') : '—', 'год у середньому')
+      + tag('7 днів', C.dim),
+    columns(hours, [PAL.blue], ART_WIDE, 74, Math.max(9, ...avg)),
+    scale(days.map((day) => ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'][new Date(`${day}T12:00:00Z`).getUTCDay()])),
+    2,
+  ));
+
+  return renderGrid('Сон', d.dateLabel, tiles);
 }
