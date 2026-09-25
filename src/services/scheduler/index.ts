@@ -7,6 +7,7 @@ import { pendingGarminActivities, markGarminProcessed, proposalsFromActivity } f
 import { sendMorningBrief } from '../brief/index.js';
 import { syncWellnessFromIntervals } from '../training/intervals.js';
 import { fetchSleepEndReal } from '../garmin/morning.js';
+import { fetchGarminDayStats } from '../garmin/today.js';
 import { garminConfigured } from '../garmin/client.js';
 import { postNewTrainings, trainingPostsEnabled } from '../training/eveningPost.js';
 import { sendEveningReport } from '../evening/index.js';
@@ -180,13 +181,38 @@ async function maybeEveningTrainingPost(bot: Bot) {
   }
 }
 
-// ─── Вечірній звіт — раз на день, вікно 22:00–22:05, лише власнику ────
+// ─── Вечірній звіт — з 22:00, але тільки коли годинник синхронізувався ──
+// Наосліп о 22:00 звіт показував цифри станом на ранок: якщо телефон не
+// відкривали, Garmin віддає дані з моменту останнього синку. Тож від 22:00
+// перевіряємо свіжість раз на 10 хв і шлемо, щойно дані свіжі; о 23:30 —
+// однаково шлемо, із позначкою «станом на» в заголовку.
+const EVENING_HOUR = 22;
+const EVENING_DEADLINE_MIN = 23 * 60 + 30;
+const SYNC_CHECK_INTERVAL_MS = 10 * 60_000;
+const SYNC_FRESH_MS = 45 * 60_000;
+
 let lastEveningReportDate = '';
+let lastSyncCheckAt = 0;
+
 async function maybeEveningReport(bot: Bot) {
   const owner = ownerId();
   if (!owner) return;
   const { hour, minute, date } = kyivNow();
-  if (hour !== 22 || minute > 5 || lastEveningReportDate === date) return;
+  if (lastEveningReportDate === date || hour < EVENING_HOUR) return;
+
+  const now = Date.now();
+  let send = !garminConfigured(); // нема Garmin — нема чого чекати
+
+  if (garminConfigured() && now - lastSyncCheckAt >= SYNC_CHECK_INTERVAL_MS) {
+    lastSyncCheckAt = now;
+    try {
+      const stats = await fetchGarminDayStats(date);
+      if (stats.lastSync != null && now - stats.lastSync <= SYNC_FRESH_MS) send = true;
+    } catch { /* спробуємо за 10 хв */ }
+  }
+  if (!send && hour * 60 + minute >= EVENING_DEADLINE_MIN) send = true;
+  if (!send) return;
+
   lastEveningReportDate = date;
   try {
     await sendEveningReport(bot.api, owner);

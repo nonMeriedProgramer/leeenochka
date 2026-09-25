@@ -35,17 +35,23 @@ export async function renderEveningPanel(d: EveningData): Promise<Buffer> {
     scale(['мін ' + (bb?.lowest ?? '—'), 'макс ' + (bb?.highest ?? '—')]),
   ));
 
-  // 3. Тренування — стадіон із зонами, як «пульс/зона»
+  // 3. Тренування — стадіон із зонами. Факт тренування беремо з Garmin (він
+  // знає одразу), зони — з intervals.icu, якщо активність туди вже доїхала.
   const zone = d.todayActivity ? dominantZone(d.todayActivity.icu_hr_zone_times) : null;
-  const mins = d.todayActivity ? Math.round((d.todayActivity.moving_time ?? 0) / 60) : null;
+  const trained = d.todayGarmin ?? d.todayActivity;
+  const seconds = d.todayGarmin?.seconds ?? d.todayActivity?.moving_time ?? null;
+  const avgHr = d.todayGarmin?.avgHr ?? d.todayActivity?.average_heartrate ?? null;
+  const mins = seconds != null ? Math.round(seconds / 60) : null;
   const zoneColors = [C.blue, C.cyan, C.green, C.yellow, C.orange, C.red, C.pink];
-  const zoneColor = zone ? zoneColors[Math.min(zone.zone - 1, zoneColors.length - 1)] : C.dim;
+  const zoneColor = zone ? zoneColors[Math.min(zone.zone - 1, zoneColors.length - 1)] : C.green;
   tiles.push(tile(
-    d.todayActivity
-      ? val(`${mins}`, 'хв', C.text) + tag(zone ? `зона ${zone.zone}` : 'є', zoneColor)
+    trained
+      ? val(mins != null ? `${mins}` : '—', 'хв', C.text) + tag(zone ? `зона ${zone.zone}` : '', zoneColor)
       : val(d.daysSinceTraining != null ? String(d.daysSinceTraining) : '—', 'днів', C.dim) + tag('пауза', C.dim),
-    zoneStadium(zone?.zone ?? null, d.todayActivity?.icu_hr_zone_times?.length ?? 7, ART, 54),
-    d.todayActivity?.average_heartrate ? scale([`сер ${Math.round(d.todayActivity.average_heartrate)} уд/хв`]) : scale(['без тренування сьогодні']),
+    zoneStadium(zone?.zone ?? (trained ? 3 : null), d.todayActivity?.icu_hr_zone_times?.length ?? 7, ART, 54),
+    scale([trained
+      ? `${d.todayGarmin?.name ?? 'тренування'}${avgHr != null ? ` · ${Math.round(avgHr)} уд/хв` : ''}`.slice(0, 30)
+      : 'без тренування сьогодні']),
   ));
 
   // 4. Пульс спокою — циферблат зі стрілкою, як «радіо»
@@ -162,5 +168,10 @@ export async function renderEveningPanel(d: EveningData): Promise<Buffer> {
     scale([tw?.sunrise ? `схід ${tw.sunrise}` : 'схід —', tw?.sunset ? `захід ${tw.sunset}` : '']),
   ));
 
-  return renderGrid('Підсумок дня', d.dateLabel, tiles);
+  // Якщо годинник давно не синкався, цифри дня — не підсумок, а зріз на момент
+  // синку. Краще сказати це в заголовку, ніж видати застиглі числа за остаточні.
+  const stale = d.garmin?.lastSync != null && Date.now() - d.garmin.lastSync > 45 * 60_000
+    ? ` · дані станом на ${new Intl.DateTimeFormat('uk-UA', { timeZone: 'Europe/Kyiv', hour: '2-digit', minute: '2-digit' }).format(d.garmin.lastSync)}`
+    : '';
+  return renderGrid('Підсумок дня', `${d.dateLabel}${stale}`, tiles);
 }

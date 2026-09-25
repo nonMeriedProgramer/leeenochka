@@ -496,7 +496,8 @@ export function createBot(token: string) {
       const g = data.garmin;
       const got = [
         `Garmin: ${g ? `✓ кроки ${g.steps ?? '—'}, заряд ${g.bodyBattery.now ?? '—'}, стрес ${g.stress.avg ?? '—'}` : '✗'}`,
-        `Тренування: ${data.todayActivity ? '✓ є сьогодні' : `✗ днів без — ${data.daysSinceTraining ?? '—'}`}`,
+        `Синк годинника: ${g?.lastSync ? `${new Date(g.lastSync).toLocaleTimeString('uk-UA', { timeZone: 'Europe/Kyiv', hour: '2-digit', minute: '2-digit' })} (${Math.round((Date.now() - g.lastSync) / 60000)} хв тому)` : '—'}`,
+        `Тренування: ${data.todayGarmin ? `✓ Garmin: ${data.todayGarmin.name ?? data.todayGarmin.type}` : data.todayActivity ? '✓ intervals.icu' : `✗ днів без — ${data.daysSinceTraining ?? '—'}`}`,
         `План дня: ${data.plan.done}/${data.plan.total}`,
         `Погода завтра: ${data.tomorrowWeather ? '✓' : '✗'} · подія завтра: ${data.tomorrowEvent ? '✓' : '✗'}`,
       ];

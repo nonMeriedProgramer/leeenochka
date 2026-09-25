@@ -8,7 +8,7 @@ import { kyivNow } from '../../utils/kyiv.js';
 import { safe } from '../../utils/safe.js';
 import { getUpcomingEvents, isCalendarConnected } from '../calendar/index.js';
 import { getWeekItems, todayDayKey } from '../plan/index.js';
-import { fetchGarminDayStats, type GarminDayStats } from '../garmin/today.js';
+import { fetchGarminActivities, fetchGarminDayStats, type GarminActivity, type GarminDayStats } from '../garmin/today.js';
 import { fetchGarminSleep, type GarminSleep } from '../garmin/morning.js';
 import { fetchActivities, fetchWellness, intervalsConfigured, type IcuActivity } from '../training/intervals.js';
 import { shiftDate } from '../brief/stats.js';
@@ -20,8 +20,9 @@ export interface EveningData {
   dateLabel: string;
   garmin: GarminDayStats | null;
   sleep: GarminSleep | null;         // минула ніч — фази, тривалість, пульс
-  todayActivity: IcuActivity | null;
-  daysSinceTraining: number | null;  // 0, якщо тренувався сьогодні
+  todayActivity: IcuActivity | null;    // з intervals.icu — має зони пульсу
+  todayGarmin: GarminActivity | null;   // напряму з Garmin — без затримки синку
+  daysSinceTraining: number | null;     // 0, якщо тренувався сьогодні
   weekMinutes: number | null;        // сума тренувань за останні 7 днів
   plan: { done: number; total: number };
   rhrRange: { low: number; high: number } | null;
@@ -77,9 +78,10 @@ export async function gatherEveningData(): Promise<EveningData> {
   const sources: string[] = [];
   const icu = intervalsConfigured();
 
-  const [garmin, sleep, training, plan, wellness, weather, tomorrowEvent] = await Promise.all([
+  const [garmin, sleep, garminActs, training, plan, wellness, weather, tomorrowEvent] = await Promise.all([
     safe('Garmin', sources, () => fetchGarminDayStats(date), null as GarminDayStats | null),
     safe('Garmin сон', sources, () => fetchGarminSleep(date), null as GarminSleep | null),
+    safe('Garmin тренування', sources, () => fetchGarminActivities(date), [] as GarminActivity[]),
     gatherTraining(date, sources),
     gatherPlanToday(sources),
     icu ? safe('intervals.icu wellness', sources, () => fetchWellness(shiftDate(date, -30), date), [] as Awaited<ReturnType<typeof fetchWellness>>) : Promise.resolve([]),
@@ -94,9 +96,17 @@ export async function gatherEveningData(): Promise<EveningData> {
   const sorted = [...wellness].sort((a, b) => a.id.localeCompare(b.id));
   const hrvAvg = (sorted.find((r) => r.id === date) ?? sorted.at(-1))?.hrv ?? null;
 
+  // Garmin бачить тренування одразу, intervals.icu — із затримкою, тож факт
+  // «сьогодні тренувався» беремо з Garmin, а зони пульсу — з intervals, коли доїдуть.
+  const todayGarmin = garminActs.length
+    ? garminActs.reduce((longest, a) => ((a.seconds ?? 0) > (longest.seconds ?? 0) ? a : longest))
+    : null;
+  const daysSince = todayGarmin ? 0 : training.daysSince;
+
   return {
     date, dateLabel, garmin, sleep,
-    todayActivity: training.today, daysSinceTraining: training.daysSince, weekMinutes: training.weekMinutes,
+    todayActivity: training.today, todayGarmin,
+    daysSinceTraining: daysSince, weekMinutes: training.weekMinutes,
     plan,
     rhrRange: typicalRange(wellness.map((r) => r.restingHR)),
     hrvAvg,
